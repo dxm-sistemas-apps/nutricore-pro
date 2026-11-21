@@ -1,6 +1,6 @@
 // backend/server.js
-// Servidor Node.js - API Oficial de ORDERS do Mercado Pago (PIX + Checkout Pro + Webhook)
-// Compativel com NutriCore Pro v4.0 (sem precisar alterar o frontend)
+// Servidor Node.js - API Oficial de ORDERS do Mercado Pago (PIX + Checkout Pro + Saldo MP + Webhook)
+// Compativel com NutriCore Pro v4.0
 
 require('dotenv').config();
 const express = require('express');
@@ -219,11 +219,19 @@ app.post('/api/payments/pix', async (req, res) => {
 });
 
 // =========================================================================
-// 3. GERAR CHECKOUT PRO (CARTAO DE CREDITO / DEBITO)
+// 3. GERAR CHECKOUT PRO (SALDO MERCADO PAGO / CARTAO DE CREDITO / DEBITO)
 // =========================================================================
 app.post('/api/payments/checkout', async (req, res) => {
   try {
-    const { clinicId, appointmentId, financeId, amount, description, payerEmail } = req.body;
+    const {
+      clinicId,
+      appointmentId,
+      financeId,
+      amount,
+      description,
+      payerEmail,
+      paymentMethod
+    } = req.body;
     const token = await getClinicMpToken(clinicId);
 
     if (!token || token.includes('COLE_SEU')) {
@@ -234,6 +242,7 @@ app.post('/api/payments/checkout', async (req, res) => {
 
     const meta = { clinicId, appointmentId, financeId };
     const externalRef = encodeRef(meta);
+    const isMpBalance = paymentMethod === 'mp_balance';
 
     const payload = {
       items: [
@@ -246,6 +255,13 @@ app.post('/api/payments/checkout', async (req, res) => {
       ],
       payer: { email: (payerEmail || 'paciente@nutricore.com').trim() },
       external_reference: externalRef,
+      payment_methods: {
+        // Mantem saldo em conta (account_money) disponivel no Checkout Pro
+        excluded_payment_types: isMpBalance
+          ? [{ id: 'ticket' }]
+          : [{ id: 'ticket' }, { id: 'bank_transfer' }],
+        installments: isMpBalance ? 1 : 6
+      },
       back_urls: {
         success: `${FRONTEND_URL}/?mp_status=approved&ag=${encodeURIComponent(appointmentId || '')}`,
         pending: `${FRONTEND_URL}/?mp_status=pending&ag=${encodeURIComponent(appointmentId || '')}`,
@@ -279,6 +295,7 @@ app.post('/api/payments/checkout', async (req, res) => {
 
     res.json({
       preferenceId: data.id,
+      paymentMethod: isMpBalance ? 'mp_balance' : 'credit_card',
       init_point: data.init_point,
       sandbox_init_point: data.sandbox_init_point
     });
