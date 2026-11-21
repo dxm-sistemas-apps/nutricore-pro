@@ -36,9 +36,21 @@
         </div>
       </div>
 
+      <!-- ESCOLHA DE PERFIL: PROFISSIONAL/CLINICA OU PACIENTE -->
+      <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl mb-4">
+        <button type="button" data-auth-role="PROFISSIONAL"
+          class="auth-role-btn py-2 px-3 rounded-lg text-xs font-bold bg-emerald-600 text-white shadow transition">
+          Profissional / Clinica
+        </button>
+        <button type="button" data-auth-role="PACIENTE"
+          class="auth-role-btn py-2 px-3 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">
+          Paciente
+        </button>
+      </div>
+
       <form id="login-form" class="space-y-4">
         <div>
-          <label class="text-xs font-semibold text-slate-600 uppercase">E-mail Profissional</label>
+          <label id="login-email-label" class="text-xs font-semibold text-slate-600 uppercase">E-mail Profissional</label>
           <input type="email" id="login-email" value="clara@nutri.com" required
             class="w-full mt-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none" />
         </div>
@@ -47,7 +59,7 @@
           <input type="password" id="login-pass" value="123" required
             class="w-full mt-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none" />
         </div>
-        <button type="submit"
+        <button type="submit" id="login-submit-btn"
           class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-md transition">
           Entrar no Consultorio
         </button>
@@ -60,10 +72,11 @@
         <p>• <b>ana@paciente.com</b> / senha: <b>123</b> (<b>Portal do Cliente / Paciente</b>)</p>
       </div>
 
-      <button id="toggle-register" class="w-full mt-4 text-sm text-emerald-700 font-medium hover:underline">
+      <button id="toggle-register" type="button" class="w-full mt-4 text-sm text-emerald-700 font-medium hover:underline">
         Cadastrar novo profissional / clinica isolada
       </button>
 
+      <!-- CADASTRO PROFISSIONAL / CLINICA -->
       <form id="register-form" class="hidden space-y-3 mt-4 pt-4 border-t">
         <input id="reg-clinic" placeholder="Nome da Clinica" required class="w-full px-3 py-2 rounded-lg border text-sm" />
         <input id="reg-name" placeholder="Seu Nome (ex: Dra. Julia Lima)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
@@ -77,6 +90,21 @@
         </div>
         <button type="submit" class="w-full py-2.5 rounded-xl bg-slate-900 text-white font-semibold text-sm">
           Criar Clinica Isolada
+        </button>
+      </form>
+
+      <!-- AUTOCADASTRO DO PACIENTE (ENVIA PARA ACEITE AUTOMATICO NO FIREBASE) -->
+      <form id="register-patient-form" class="hidden space-y-3 mt-4 pt-4 border-t">
+        <input id="reg-pat-clinic" placeholder="Codigo ou E-mail da Clinica" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-name" placeholder="Seu Nome Completo" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-phone" placeholder="Seu WhatsApp (ex: 21999998888)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-email" type="email" placeholder="Seu E-mail de acesso" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-pass" type="password" placeholder="Crie sua Senha (min. 6 caracteres)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <p class="text-[11px] text-slate-500">
+          Ao criar sua conta, seu cadastro sera enviado automaticamente para o profissional aceitar seu acesso.
+        </p>
+        <button type="submit" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm">
+          Criar Minha Conta de Paciente
         </button>
       </form>
     </div>

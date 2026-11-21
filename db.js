@@ -19,7 +19,7 @@ async function initFirebaseIfNeeded() {
       tabManager: fsMod.persistentMultipleTabManager()
     })
   });
-  fb = { app, auth, db, authMod, fsMod };
+  fb = { app, auth, db, authMod, fsMod, appMod };
   return fb;
 }
 
@@ -31,6 +31,9 @@ export const DEFAULT_SCHEDULE = {
   lunchEnd: '13:00',
   slotMinutes: 60,
   pixKey: 'clinica@pix.com.br',
+  priceConsulta: 250,
+  pricePlanoTri: 650,
+  pricePlanoSemestral: 1150,
   services: [
     { id: 'srv1', name: 'Consulta Inicial (Presencial)', price: 350 },
     { id: 'srv2', name: 'Retorno / Reavaliacao', price: 220 },
@@ -69,21 +72,35 @@ export const ClinicDB = {
     }
   },
 
-  async login(email, password) {
+  async login(email, password, expectedRole = null) {
     if (USE_FIREBASE) {
       await initFirebaseIfNeeded();
       const cred = await fb.authMod.signInWithEmailAndPassword(fb.auth, email, password);
       const snap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'users', cred.user.uid));
       if (!snap.exists()) throw new Error('Perfil nao encontrado.');
-      this.currentSession = { uid: cred.user.uid, ...snap.data() };
+      const profile = { uid: cred.user.uid, ...snap.data() };
+      if (expectedRole && profile.role && profile.role !== expectedRole) {
+        throw new Error(
+          expectedRole === 'PACIENTE'
+            ? 'Esta conta nao e de Paciente. Selecione "Profissional / Clinica" acima.'
+            : 'Esta conta nao e de Profissional/Clinica. Selecione "Paciente" acima.'
+        );
+      }
+      this.currentSession = profile;
       return this.currentSession;
     } else {
       this._seedLocalAccounts();
       const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
       const user = accounts.find(a => a.email.toLowerCase() === email.toLowerCase() && a.password === password);
       if (!user) throw new Error('E-mail ou senha invalidos.');
+      if (expectedRole && user.role && user.role !== expectedRole) {
+        throw new Error(
+          expectedRole === 'PACIENTE'
+            ? 'Esta conta e de Profissional/Clinica. Troque a aba acima para entrar.'
+            : 'Esta conta e de Paciente. Troque a aba acima para entrar.'
+        );
+      }
       this._ensureClinicSeed(user.clinicId);
-      // Carrega branding atualizado da clinica
       const clinic = this._getClinicMetaLocal(user.clinicId);
       const session = { ...user, ...clinic, role: user.role, patientId: user.patientId || null, userName: user.name };
       this.currentSession = session;
@@ -123,13 +140,159 @@ export const ClinicDB = {
     }
   },
 
-  // Profissional libera acesso ao Portal do Cliente para um paciente
+  // Autocadastro automatico do Paciente: cria login e senha no Firebase e envia para aceite do profissional
+  async registerPatientSelf({ clinicIdentifier, name, phone, email, password }) {
+    const clinicId = (clinicIdentifier || 'clinica_dra_clara').trim();
+    const now = new Date().toISOString();
+
+    if (USE_FIREBASE) {
+      await initFirebaseIfNeeded();
+      const secondaryApp = fb.appMod.initializeApp(FIREBASE_CONFIG, `PatientReg_${Date.now()}`);
+      const secondaryAuth = fb.authMod.getAuth(secondaryApp);
+      try {
+        const cred = await fb.authMod.createUserWithEmailAndPassword(secondaryAuth, email, password);
+        const uid = cred.user.uid;
+        const clinicSnap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId));
+        const clinicData = clinicSnap.exists() ? clinicSnap.data() : {};
+
+        const patientProfile = {
+          uid,
+          patientId: uid,
+          clinicId,
+          clinicName: clinicData.clinicName || clinicId,
+          name: clinicData.name || 'Profissional',
+          crn: clinicData.crn || '',
+          phone: clinicData.phone || '',
+          primaryColor: clinicData.primaryColor || '#059669',
+          userName: name,
+          patientName: name,
+          patientPhone: phone || '',
+          email: email.toLowerCase(),
+          role: 'PACIENTE',
+          approvalStatus: 'PENDING',
+          createdAt: now
+        };
+
+        await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'users', uid), patientProfile);
+        await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId, 'patientRequests', uid), {
+          ...patientProfile,
+          requestedAt: now
+        });
+        await fb.authMod.signOut(secondaryAuth).catch(() => {});
+        return patientProfile;
+      } finally {
+        await fb.appMod.deleteApp(secondaryApp).catch(() => {});
+      }
+    } else {
+      this._seedLocalAccounts();
+      this._ensureClinicSeed(clinicId);
+      const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
+      if (accounts.find(a => a.email.toLowerCase() === email.toLowerCase())) {
+        throw new Error('E-mail ja cadastrado.');
+      }
+      const uid = 'pat_' + Date.now();
+      const rec = {
+        uid,
+        clinicId,
+        patientId: uid,
+        name,
+        userName: name,
+        patientName: name,
+        phone: phone || '',
+        email,
+        password,
+        role: 'PACIENTE',
+        approvalStatus: 'PENDING',
+        createdAt: now
+      };
+      accounts.push(rec);
+      localStorage.setItem(`${DB_PREFIX}accounts`, JSON.stringify(accounts));
+
+      const reqKey = `${DB_PREFIX}${clinicId}_patientRequests`;
+      const reqs = JSON.parse(localStorage.getItem(reqKey) || '[]');
+      reqs.unshift(rec);
+      localStorage.setItem(reqKey, JSON.stringify(reqs));
+      return rec;
+    }
+  },
+
+  async getPendingPatientRequests() {
+    if (!this.currentSession) return [];
+    const cid = this.currentSession.clinicId;
+    if (USE_FIREBASE) {
+      await initFirebaseIfNeeded();
+      const snap = await fb.fsMod.getDocs(fb.fsMod.collection(fb.db, 'clinics', cid, 'patientRequests'));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.approvalStatus === 'PENDING');
+    } else {
+      const reqs = JSON.parse(localStorage.getItem(`${DB_PREFIX}${cid}_patientRequests`) || '[]');
+      return reqs.filter(r => r.approvalStatus === 'PENDING');
+    }
+  },
+
+  async approvePatientRequest(uid, status = 'APPROVED') {
+    if (!this.currentSession || !uid) return;
+    const cid = this.currentSession.clinicId;
+    const patch = {
+      approvalStatus: status,
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: this.currentSession.uid || null
+    };
+
+    if (USE_FIREBASE) {
+      await initFirebaseIfNeeded();
+      const reqDoc = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patientRequests', uid));
+      const reqData = reqDoc.exists() ? reqDoc.data() : {};
+      await fb.fsMod.updateDoc(fb.fsMod.doc(fb.db, 'users', uid), patch).catch(() => {});
+      await fb.fsMod.updateDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patientRequests', uid), patch).catch(() => {});
+      if (status === 'APPROVED') {
+        await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patients', uid), {
+          id: uid,
+          name: reqData.userName || reqData.name || reqData.email,
+          email: reqData.email || '',
+          phone: reqData.phone || '',
+          approvalStatus: 'APPROVED',
+          createdAt: new Date().toISOString()
+        }, { merge: true });
+      }
+    } else {
+      const reqKey = `${DB_PREFIX}${cid}_patientRequests`;
+      const reqs = JSON.parse(localStorage.getItem(reqKey) || '[]');
+      const target = reqs.find(r => (r.uid || r.id) === uid);
+      const updatedReqs = reqs.map(r => ((r.uid || r.id) === uid ? { ...r, ...patch } : r));
+      localStorage.setItem(reqKey, JSON.stringify(updatedReqs));
+
+      const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]').map(a =>
+        ((a.uid || a.patientId) === uid ? { ...a, ...patch } : a)
+      );
+      localStorage.setItem(`${DB_PREFIX}accounts`, JSON.stringify(accounts));
+
+      if (status === 'APPROVED' && target) {
+        const pats = JSON.parse(localStorage.getItem(`${DB_PREFIX}${cid}_patients`) || '[]');
+        if (!pats.find(p => p.id === uid)) {
+          pats.unshift({
+            id: uid,
+            name: target.userName || target.name || target.email,
+            email: target.email || '',
+            phone: target.phone || '',
+            sex: 'F',
+            age: 30,
+            height: 165,
+            goal: 'Acompanhamento',
+            allergies: '',
+            anamnesis: '',
+            createdAt: new Date().toISOString()
+          });
+          localStorage.setItem(`${DB_PREFIX}${cid}_patients`, JSON.stringify(pats));
+        }
+      }
+    }
+  },
+
   async registerPatientPortalAccess({ patientId, patientName, email, password }) {
     const u = this.currentSession;
     if (!email || !password) return;
     if (USE_FIREBASE) {
-      // Em producao Firebase, recomenda-se criar via secondaryApp para nao deslogar o profissional
-      throw new Error('No modo Firebase, cadastre o e-mail do paciente no Console Auth ou use o modo Local para testes.');
+      throw new Error('No modo Firebase, o proprio paciente cria seu login e senha na tela inicial e voce aceita no Prontuario.');
     } else {
       const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
       const idx = accounts.findIndex(a => a.email.toLowerCase() === email.toLowerCase());
@@ -139,7 +302,8 @@ export const ClinicDB = {
         name: patientName,
         email,
         password,
-        role: 'PACIENTE'
+        role: 'PACIENTE',
+        approvalStatus: 'APPROVED'
       };
       if (idx >= 0) accounts[idx] = rec; else accounts.push(rec);
       localStorage.setItem(`${DB_PREFIX}accounts`, JSON.stringify(accounts));
@@ -169,16 +333,15 @@ export const ClinicDB = {
     this.currentSession = null;
   },
 
-  // Configuracao de Agenda & Horarios da Clinica
   async getScheduleConfig() {
     const cid = this.currentSession.clinicId;
     if (USE_FIREBASE) {
       await initFirebaseIfNeeded();
       const snap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'scheduleConfig', 'default'));
-      return snap.exists() ? { ...DEFAULT_SCHEDULE, ...snap.data() } : DEFAULT_SCHEDULE;
+      return snap.exists() ? { ...DEFAULT_SCHEDULE, ...snap.data() } : { ...DEFAULT_SCHEDULE };
     } else {
       const raw = localStorage.getItem(`${DB_PREFIX}${cid}_scheduleConfig`);
-      return raw ? { ...DEFAULT_SCHEDULE, ...JSON.parse(raw) } : DEFAULT_SCHEDULE;
+      return raw ? { ...DEFAULT_SCHEDULE, ...JSON.parse(raw) } : { ...DEFAULT_SCHEDULE };
     }
   },
 
@@ -192,7 +355,6 @@ export const ClinicDB = {
     }
   },
 
-  // CRUD Multi-Tenant
   _localKey(col) {
     return `${DB_PREFIX}${this.currentSession.clinicId}_${col}`;
   },
@@ -245,7 +407,6 @@ export const ClinicDB = {
     }
   },
 
-  // Helpers locais
   _getClinicMetaLocal(clinicId) {
     const raw = localStorage.getItem(`${DB_PREFIX}meta_${clinicId}`);
     if (raw) return JSON.parse(raw);
@@ -259,9 +420,9 @@ export const ClinicDB = {
     const key = `${DB_PREFIX}accounts`;
     if (!localStorage.getItem(key)) {
       localStorage.setItem(key, JSON.stringify([
-        { clinicId: 'clinica_dra_clara', email: 'clara@nutri.com', password: '123', name: 'Dra. Clara Mendes', role: 'NUTRICIONISTA' },
-        { clinicId: 'clinica_dra_clara', email: 'ana@paciente.com', password: '123', name: 'Ana Beatriz Souza', role: 'PACIENTE', patientId: 'p1' },
-        { clinicId: 'clinica_performance', email: 'marcos@nutri.com', password: '123', name: 'Dr. Marcos Silva', role: 'NUTRICIONISTA' }
+        { clinicId: 'clinica_dra_clara', email: 'clara@nutri.com', password: '123', name: 'Dra. Clara Mendes', role: 'NUTRICIONISTA', approvalStatus: 'APPROVED' },
+        { clinicId: 'clinica_dra_clara', email: 'ana@paciente.com', password: '123', name: 'Ana Beatriz Souza', role: 'PACIENTE', patientId: 'p1', approvalStatus: 'APPROVED' },
+        { clinicId: 'clinica_performance', email: 'marcos@nutri.com', password: '123', name: 'Dr. Marcos Silva', role: 'NUTRICIONISTA', approvalStatus: 'APPROVED' }
       ]));
     }
   },
