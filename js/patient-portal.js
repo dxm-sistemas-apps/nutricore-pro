@@ -1,6 +1,6 @@
 // www/js/patient-portal.js
 // Portal Completo do Cliente (Paciente): Dieta + Substituicoes + Check-in + Agua + Lista de Compras
-// + Autoagendamento (Grade Livre LGPD + Checkout PIX/Clinica) + Evolucao + Receitas/Recibos + Chat
+// + Autoagendamento (Valores Configurados + Saldo Mercado Pago + Remarcar/Excluir) + Evolucao + Docs + Chat
 
 import { ClinicDB } from './db.js';
 import { PAYMENT_API_URL } from './firebase-config.js';
@@ -19,7 +19,6 @@ export function mountPatientPortal({ printDocument, buildGoogleCalendarUrl, down
 
   document.documentElement.style.setProperty('--brand', u.primaryColor || '#059669');
 
-  // Renderiza o Shell exclusivo do Paciente
   document.getElementById('app-shell').innerHTML = `
     <aside class="hidden md:flex md:w-64 bg-slate-900 text-slate-200 flex-col justify-between p-5 shrink-0">
       <div>
@@ -123,7 +122,6 @@ async function renderMinhaDieta(ctx) {
   const waterGoal = 2500;
   const waterPct = Math.min(100, Math.round((daily.waterMl / waterGoal) * 100));
 
-  // Lista de compras consolidada
   const shoppingItems = [];
   if (plan) {
     const map = {};
@@ -151,7 +149,6 @@ async function renderMinhaDieta(ctx) {
         ` : ''}
       </div>
 
-      <!-- BARRAS DE PROGRESSO (ADESAO E AGUA) -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="bg-white p-5 rounded-2xl border shadow-sm">
           <div class="flex justify-between text-xs font-bold uppercase text-slate-500 mb-2">
@@ -168,7 +165,7 @@ async function renderMinhaDieta(ctx) {
             <span class="text-xs font-bold uppercase text-slate-500">Hidratacao (${daily.waterMl} / ${waterGoal} ml)</span>
             <div class="flex gap-1.5">
               <button id="add-water" class="px-2.5 py-1 rounded-lg bg-sky-600 text-white text-xs font-bold">+250ml</button>
-              <button id="rst-water" class="px-2 py-1 rounded-lg bg-slate-100 text-slate-500 text-xs">Zerar</button>
+              <button id="rst-water" class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-500 text-xs">Zerar</button>
             </div>
           </div>
           <div class="w-full h-3 bg-sky-100 rounded-full overflow-hidden">
@@ -268,7 +265,7 @@ async function renderMinhaDieta(ctx) {
 }
 
 // =========================================================================
-// 2. AUTOAGENDAMENTO (GRADE LIVRE LGPD + CHECKOUT PIX / PAGAR NA CLINICA)
+// 2. AUTOAGENDAMENTO (VALORES DO PROFISSIONAL + SALDO MP + REMARCAR/EXCLUIR)
 // =========================================================================
 function generateSlots(cfg) {
   const slots = [];
@@ -294,6 +291,17 @@ async function renderAutoAgendamento(ctx) {
   const busy = await ClinicDB.getAll('busySlots');
   const myEvents = (await ClinicDB.getAll('agenda')).filter(e => e.patientId === u.patientId);
 
+  const priceConsulta = Number(cfg.priceConsulta ?? 250);
+  const priceTri = Number(cfg.pricePlanoTri ?? 650);
+  const priceSem = Number(cfg.pricePlanoSemestral ?? 1150);
+
+  const optionsList = [
+    { id: 'consulta', name: 'Consulta Nutricional', price: priceConsulta },
+    { id: 'planoTri', name: 'Plano Trimestral', price: priceTri },
+    { id: 'planoSemestral', name: 'Plano Semestral', price: priceSem },
+    ...(cfg.services || [])
+  ];
+
   const dayOfWeek = new Date(selectedBookingDate + 'T12:00:00').getDay();
   const isOpenDay = (cfg.days || [1, 2, 3, 4, 5]).includes(dayOfWeek);
   const busyTimes = busy.filter(b => b.date === selectedBookingDate).map(b => b.time);
@@ -303,8 +311,24 @@ async function renderAutoAgendamento(ctx) {
   document.getElementById('patient-view').innerHTML = `
     <div class="space-y-6">
       <div>
-        <h1 class="text-2xl font-bold text-slate-900">Agendar Consulta</h1>
+        <h1 class="text-2xl font-bold text-slate-900">Agendar Consulta & Planos</h1>
         <p class="text-sm text-slate-500">Escolha uma data e um horario disponivel na agenda da ${u.clinicName}</p>
+      </div>
+
+      <!-- TABELA DE VALORES DEFINIDOS PELO PROFISSIONAL -->
+      <div class="grid grid-cols-3 gap-3">
+        <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+          <p class="text-[11px] font-bold uppercase text-slate-400">Consulta</p>
+          <p class="text-lg font-bold text-slate-900">R$ ${priceConsulta.toFixed(2)}</p>
+        </div>
+        <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+          <p class="text-[11px] font-bold uppercase text-slate-400">Plano Trimestral</p>
+          <p class="text-lg font-bold text-brand">R$ ${priceTri.toFixed(2)}</p>
+        </div>
+        <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+          <p class="text-[11px] font-bold uppercase text-slate-400">Plano Semestral</p>
+          <p class="text-lg font-bold text-slate-900">R$ ${priceSem.toFixed(2)}</p>
+        </div>
       </div>
 
       <div class="bg-white p-6 rounded-2xl border shadow-sm space-y-5">
@@ -315,9 +339,9 @@ async function renderAutoAgendamento(ctx) {
               class="w-full mt-1 px-3 py-2.5 rounded-xl border text-sm font-medium" />
           </div>
           <div>
-            <label class="text-xs font-bold uppercase text-slate-500">2. Tipo de Atendimento</label>
+            <label class="text-xs font-bold uppercase text-slate-500">2. Tipo de Atendimento / Plano</label>
             <select id="bk-service" class="w-full mt-1 px-3 py-2.5 rounded-xl border text-sm">
-              ${cfg.services.map(s => `<option value="${s.id}">${s.name} — R$ ${Number(s.price).toFixed(2)}</option>`).join('')}
+              ${optionsList.map(s => `<option value="${s.id}" data-price="${s.price}" data-name="${s.name}">${s.name} — R$ ${Number(s.price).toFixed(2)}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -340,6 +364,7 @@ async function renderAutoAgendamento(ctx) {
             <label class="text-xs font-bold uppercase text-slate-500">4. Forma de Pagamento (Checkout)</label>
             <select id="bk-pay" class="w-full mt-1 px-3 py-2.5 rounded-xl border text-sm font-medium">
               <option value="MP_PIX">PIX Dinamico (Mercado Pago — Aprovacao Automatica)</option>
+              <option value="MP_BALANCE">Saldo do Mercado Pago (Conta Mercado Pago)</option>
               <option value="MP_CARD">Cartao de Credito / Debito (Mercado Pago)</option>
               <option value="Pagar na Clinica">Pagar na Clinica (No dia da consulta)</option>
             </select>
@@ -385,20 +410,22 @@ async function renderAutoAgendamento(ctx) {
         ` : ''}
       </div>
 
-      <!-- MEUS AGENDAMENTOS -->
+      <!-- MEUS AGENDAMENTOS COM REMARCAR E EXCLUIR -->
       <div class="space-y-3">
         <h2 class="text-sm font-bold uppercase text-slate-600">Meus Agendamentos</h2>
         ${myEvents.length === 0 ? '<p class="text-sm text-slate-400">Voce ainda nao possui consultas agendadas.</p>' : myEvents.map(ev => `
           <div class="bg-white p-4 rounded-2xl border shadow-sm flex flex-wrap items-center justify-between gap-3">
             <div>
               <div class="flex items-center gap-2">
-                <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${ev.status || 'AGUARDANDO'}</span>
+                <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : ev.status === 'REMARCADO' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}">${ev.status || 'AGUARDANDO'}</span>
                 <span class="text-xs font-semibold text-slate-500">${ev.date} as ${ev.time}</span>
               </div>
               <p class="font-bold text-slate-800 mt-1">${ev.type}</p>
               <p class="text-xs text-slate-500">${ev.checkoutMode || 'Pagar na Clinica'} ${ev.amount ? '• R$ ' + Number(ev.amount).toFixed(2) : ''}</p>
             </div>
-            <div class="flex gap-2">
+            <div class="flex flex-wrap gap-2">
+              <button data-p-reschedule="${ev.id}" class="px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold">Remarcar</button>
+              <button data-p-delete="${ev.id}" class="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold">Excluir</button>
               <a href="${ctx.buildGoogleCalendarUrl(ev)}" target="_blank" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold">Google Calendar</a>
               <button data-p-ics="${ev.id}" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">.ICS</button>
             </div>
@@ -446,22 +473,30 @@ async function renderAutoAgendamento(ctx) {
 
   document.getElementById('bk-confirm').addEventListener('click', async () => {
     if (!selectedSlot) return alert('Selecione um horario livre primeiro.');
-    const srvId = document.getElementById('bk-service').value;
-    const srv = cfg.services.find(s => s.id === srvId) || cfg.services[0];
+    const srvSel = document.getElementById('bk-service');
+    const opt = srvSel.options[srvSel.selectedIndex];
+    const srvName = opt?.dataset?.name || 'Consulta Nutricional';
+    const srvPrice = Number(opt?.dataset?.price || priceConsulta);
     const payMode = document.getElementById('bk-pay').value;
     const notes = document.getElementById('bk-notes').value.trim();
 
-    const modeLabel = payMode === 'MP_PIX' ? 'PIX Mercado Pago' : payMode === 'MP_CARD' ? 'Cartao Mercado Pago' : 'Pagar na Clinica';
+    const modeLabel =
+      payMode === 'MP_PIX'
+        ? 'PIX Mercado Pago'
+        : payMode === 'MP_BALANCE'
+        ? 'Saldo do Mercado Pago'
+        : payMode === 'MP_CARD'
+        ? 'Cartao Mercado Pago'
+        : 'Pagar na Clinica';
 
-    // 1. Trava horario e cria registros pendentes
     await ClinicDB.add('busySlots', { date: selectedBookingDate, time: selectedSlot });
     const ag = await ClinicDB.add('agenda', {
       patientId: u.patientId,
       patientName: u.userName || u.name,
       date: selectedBookingDate,
       time: selectedSlot,
-      type: srv.name,
-      amount: srv.price,
+      type: srvName,
+      amount: srvPrice,
       checkoutMode: modeLabel,
       status: payMode === 'Pagar na Clinica' ? 'AGUARDANDO CONFIRMACAO' : 'AGUARDANDO PAGAMENTO',
       notes
@@ -469,9 +504,9 @@ async function renderAutoAgendamento(ctx) {
     const fin = await ClinicDB.add('finance', {
       patientId: u.patientId,
       appointmentId: ag.id,
-      desc: `${srv.name} - ${u.userName || u.name}`,
+      desc: `${srvName} - ${u.userName || u.name}`,
       type: 'RECEITA',
-      amount: Number(srv.price),
+      amount: srvPrice,
       date: selectedBookingDate,
       status: 'PENDENTE'
     });
@@ -482,7 +517,6 @@ async function renderAutoAgendamento(ctx) {
       return renderAutoAgendamento(ctx);
     }
 
-    // 2. Chama Backend Oficial do Mercado Pago
     const btn = document.getElementById('bk-confirm');
     btn.disabled = true;
     btn.textContent = 'Conectando ao Mercado Pago...';
@@ -496,8 +530,9 @@ async function renderAutoAgendamento(ctx) {
           clinicId: u.clinicId,
           appointmentId: ag.id,
           financeId: fin.id,
-          amount: Number(srv.price),
-          description: `${srv.name} - ${u.clinicName}`,
+          amount: srvPrice,
+          paymentMethod: payMode === 'MP_BALANCE' ? 'mp_balance' : payMode === 'MP_PIX' ? 'pix' : 'credit_card',
+          description: `${srvName} - ${u.clinicName}`,
           payerEmail: u.email,
           payerName: u.userName || u.name
         })
@@ -507,21 +542,46 @@ async function renderAutoAgendamento(ctx) {
 
       selectedSlot = null;
       if (payMode === 'MP_PIX') {
-        activePixCharge = { ...data, amount: srv.price, appointmentId: ag.id, financeId: fin.id };
+        activePixCharge = { ...data, amount: srvPrice, appointmentId: ag.id, financeId: fin.id };
         if (pixPollTimer) clearInterval(pixPollTimer);
         pixPollTimer = setInterval(verifyPixStatus, 5000);
         renderAutoAgendamento(ctx);
       } else {
         const url = data.init_point || data.sandbox_init_point;
-        window.open(url, '_blank');
-        alert('Checkout do Mercado Pago aberto! Assim que o pagamento for aprovado, sua consulta sera confirmada automaticamente.');
+        if (url) window.open(url, '_blank');
+        alert(
+          payMode === 'MP_BALANCE'
+            ? 'Checkout aberto! Escolha seu Saldo do Mercado Pago para concluir o pagamento.'
+            : 'Checkout do Mercado Pago aberto! Assim que o pagamento for aprovado, sua consulta sera confirmada automaticamente.'
+        );
         renderAutoAgendamento(ctx);
       }
     } catch (err) {
-      alert(`Nao foi possivel conectar ao servidor Mercado Pago (${apiBase}):\n${err.message}\n\nDica: Rode a opcao [10] no menu.bat ou configure seu MP_ACCESS_TOKEN no arquivo backend/.env.`);
+      alert(`Nao foi possivel conectar ao servidor Mercado Pago (${apiBase}):\n${err.message}\n\nVerifique o servidor no Render e o MP_ACCESS_TOKEN.`);
       btn.disabled = false;
       btn.textContent = 'Continuar para Pagamento / Confirmar';
     }
+  });
+
+  document.querySelectorAll('[data-p-reschedule]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ev = myEvents.find(x => x.id === btn.dataset.pReschedule);
+      if (!ev) return;
+      const newDate = prompt('Nova data da consulta (AAAA-MM-DD):', ev.date);
+      if (!newDate) return;
+      const newTime = prompt('Novo horario (HH:MM):', ev.time);
+      if (!newTime) return;
+      await ClinicDB.update('agenda', ev.id, { date: newDate.trim(), time: newTime.trim(), status: 'REMARCADO' });
+      renderAutoAgendamento(ctx);
+    });
+  });
+
+  document.querySelectorAll('[data-p-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Deseja realmente excluir este agendamento?')) return;
+      await ClinicDB.remove('agenda', btn.dataset.pDelete);
+      renderAutoAgendamento(ctx);
+    });
   });
 
   document.querySelectorAll('[data-p-ics]').forEach(btn => {

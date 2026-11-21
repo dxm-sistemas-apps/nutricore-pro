@@ -1,10 +1,10 @@
 import { mountPatientPortal } from './patient-portal.js';
-// www/js/app.js
 import { ClinicDB } from './db.js';
 import { TACO_DB, calcMacros, getSubstitutes } from './taco.js';
 
 let activeTab = 'prontuario';
 let selectedPatientId = null;
+let selectedAuthRole = 'PROFISSIONAL'; // 'PROFISSIONAL' | 'PACIENTE'
 let formulaItems = [{ ativo: 'Magnesio Dimalato', dose: '300 mg' }];
 let draftMeals = [
   { name: 'Cafe da Manha', time: '07:30', items: [{ foodId: 't23', grams: 100 }, { foodId: 't9', grams: 50 }, { foodId: 't36', grams: 150 }] },
@@ -35,6 +35,43 @@ function updateNetworkBadge() {
 window.addEventListener('online', updateNetworkBadge);
 window.addEventListener('offline', updateNetworkBadge);
 
+// Seletor de Perfil na tela de Login / Cadastro
+function setAuthRole(role) {
+  selectedAuthRole = role;
+  const isPatient = role === 'PACIENTE';
+
+  document.querySelectorAll('.auth-role-btn').forEach((btn) => {
+    const active = btn.dataset.authRole === role;
+    btn.className = active
+      ? 'auth-role-btn py-2 px-3 rounded-lg text-xs font-bold bg-emerald-600 text-white shadow transition'
+      : 'auth-role-btn py-2 px-3 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition';
+  });
+
+  const emailLabel = document.getElementById('login-email-label');
+  const loginEmail = document.getElementById('login-email');
+  const submitBtn = document.getElementById('login-submit-btn');
+  const toggleReg = document.getElementById('toggle-register');
+  const regPro = document.getElementById('register-form');
+  const regPat = document.getElementById('register-patient-form');
+
+  if (emailLabel) emailLabel.textContent = isPatient ? 'E-mail do Paciente' : 'E-mail Profissional';
+  if (loginEmail && !ClinicDB.isCloudMode) {
+    loginEmail.value = isPatient ? 'ana@paciente.com' : 'clara@nutri.com';
+  }
+  if (submitBtn) submitBtn.textContent = isPatient ? 'Entrar no Portal do Paciente' : 'Entrar no Consultorio';
+  if (toggleReg) {
+    toggleReg.textContent = isPatient
+      ? 'Criar minha conta de paciente (autocadastro)'
+      : 'Cadastrar novo profissional / clinica isolada';
+  }
+
+  // Se algum formulario de cadastro estiver aberto, alterna para o perfil escolhido
+  if ((regPro && !regPro.classList.contains('hidden')) || (regPat && !regPat.classList.contains('hidden'))) {
+    regPro?.classList.toggle('hidden', isPatient);
+    regPat?.classList.toggle('hidden', !isPatient);
+  }
+}
+
 // Inicializacao
 async function bootstrap() {
   const badge = document.getElementById('auth-mode-badge');
@@ -44,6 +81,11 @@ async function bootstrap() {
   } else {
     badge.textContent = 'Modo Local Offline • Pronto para Firebase';
   }
+
+  document.querySelectorAll('.auth-role-btn').forEach((btn) => {
+    btn.addEventListener('click', () => setAuthRole(btn.dataset.authRole));
+  });
+  setAuthRole('PROFISSIONAL');
 
   const session = await ClinicDB.init();
   if (session) {
@@ -64,6 +106,14 @@ function applyBranding(user) {
 }
 
 async function enterApp(user) {
+  // Bloqueio caso o paciente tenha criado conta e ainda aguarde aceite do profissional
+  if (user.role === 'PACIENTE' && user.approvalStatus === 'PENDING') {
+    alert('Seu cadastro foi criado e esta aguardando o aceite do profissional/clinica para liberar o acesso.');
+    await ClinicDB.logout();
+    location.reload();
+    return;
+  }
+
   document.getElementById('auth-screen').classList.add('hidden');
   document.getElementById('app-shell').classList.remove('hidden');
   if (user.role === 'PACIENTE') {
@@ -84,7 +134,8 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   try {
     const user = await ClinicDB.login(
       document.getElementById('login-email').value.trim(),
-      document.getElementById('login-pass').value
+      document.getElementById('login-pass').value,
+      selectedAuthRole
     );
     enterApp(user);
   } catch (err) {
@@ -93,7 +144,13 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 });
 
 document.getElementById('toggle-register').addEventListener('click', () => {
-  document.getElementById('register-form').classList.toggle('hidden');
+  if (selectedAuthRole === 'PACIENTE') {
+    document.getElementById('register-form').classList.add('hidden');
+    document.getElementById('register-patient-form').classList.toggle('hidden');
+  } else {
+    document.getElementById('register-patient-form').classList.add('hidden');
+    document.getElementById('register-form').classList.toggle('hidden');
+  }
 });
 
 document.getElementById('register-form').addEventListener('submit', async (e) => {
@@ -109,6 +166,36 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
       primaryColor: document.getElementById('reg-color').value
     });
     enterApp(user);
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+// Autocadastro do Paciente (cria login/senha no Firebase e envia solicitacao para aceite)
+document.getElementById('register-patient-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    if (typeof ClinicDB.registerPatientSelf === 'function') {
+      await ClinicDB.registerPatientSelf({
+        clinicIdentifier: document.getElementById('reg-pat-clinic').value.trim(),
+        name: document.getElementById('reg-pat-name').value.trim(),
+        phone: document.getElementById('reg-pat-phone').value.trim(),
+        email: document.getElementById('reg-pat-email').value.trim(),
+        password: document.getElementById('reg-pat-pass').value
+      });
+    } else {
+      await ClinicDB.registerPatientPortalAccess({
+        patientName: document.getElementById('reg-pat-name').value.trim(),
+        phone: document.getElementById('reg-pat-phone').value.trim(),
+        email: document.getElementById('reg-pat-email').value.trim(),
+        password: document.getElementById('reg-pat-pass').value,
+        clinicIdentifier: document.getElementById('reg-pat-clinic').value.trim(),
+        approvalStatus: 'PENDING'
+      });
+    }
+    alert('Conta criada com sucesso! Aguarde o aceite do profissional para entrar no Portal do Paciente.');
+    document.getElementById('register-patient-form').reset();
+    document.getElementById('register-patient-form').classList.add('hidden');
   } catch (err) {
     alert(err.message);
   }
@@ -177,10 +264,14 @@ async function renderTab(tab) {
 }
 
 // =========================================================================
-// MODULO 1: PRONTUARIO + ANTROPOMETRIA + GRAFICO DE EVOLUCAO
+// MODULO 1: PRONTUARIO + ANTROPOMETRIA + GRAFICO DE EVOLUCAO + ACEITE PACIENTE
 // =========================================================================
 async function renderProntuario() {
   const patients = await ClinicDB.getAll('patients');
+  const pendingRequests = typeof ClinicDB.getPendingPatientRequests === 'function'
+    ? await ClinicDB.getPendingPatientRequests()
+    : patients.filter(p => p.approvalStatus === 'PENDING');
+
   if (!selectedPatientId && patients.length > 0) selectedPatientId = patients[0].id;
   const patient = patients.find(p => p.id === selectedPatientId) || patients[0];
   const allEvals = await ClinicDB.getAll('evaluations');
@@ -218,6 +309,34 @@ async function renderProntuario() {
         </button>
       </div>
 
+      <!-- SOLICITACOES DE ACESSO CRIADAS PELOS PROPRIOS PACIENTES -->
+      ${pendingRequests.length > 0 ? `
+        <div class="bg-amber-50 border border-amber-300 rounded-2xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-bold text-amber-900">Novos Cadastros de Pacientes Aguardando Aceite (${pendingRequests.length})</h2>
+            <span class="text-[11px] font-semibold text-amber-700">Autocadastro via Firebase</span>
+          </div>
+          <div class="space-y-2">
+            ${pendingRequests.map(req => `
+              <div class="bg-white p-3 rounded-xl border border-amber-200 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p class="font-bold text-sm text-slate-900">${req.name || req.patientName}</p>
+                  <p class="text-xs text-slate-500">${req.email} ${req.phone ? '• ' + req.phone : ''}</p>
+                </div>
+                <div class="flex gap-2">
+                  <button data-approve-pat="${req.uid || req.id}" class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700">
+                    ✓ Aceitar Paciente
+                  </button>
+                  <button data-reject-pat="${req.uid || req.id}" class="px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-300">
+                    Recusar
+                  </button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
       <!-- FORMULARIO NOVO PACIENTE -->
       <form id="new-patient-form" class="hidden bg-white p-5 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-3">
         <input id="np-name" placeholder="Nome completo" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
@@ -243,7 +362,7 @@ async function renderProntuario() {
         `).join('')}
       </div>
 
-      ${!patient ? '<div class="bg-white p-8 rounded-2xl border text-center text-slate-500">Cadastre seu primeiro paciente acima para iniciar o prontuario.</div>' : `
+      ${!patient ? '<div class="bg-white p-8 rounded-2xl border text-center text-slate-500">Cadastre seu primeiro paciente acima ou aceite um cadastro pendente para iniciar o prontuario.</div>' : `
         <!-- KPIs CLINICOS -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
@@ -280,10 +399,7 @@ async function renderProntuario() {
             </div>
             <textarea id="edit-anamnesis" rows="5" class="w-full p-3 rounded-xl border text-sm">${patient.anamnesis || ''}</textarea>
             <div class="flex justify-between items-center">
-              <div class="flex gap-3 flex-wrap">
-                <button id="btn-go-diet" class="text-xs font-semibold text-brand hover:underline">Abrir Plano Alimentar →</button>
-                <button id="btn-portal-access" class="text-xs font-semibold text-blue-600 hover:underline">Liberar Login do Paciente</button>
-              </div>
+              <button id="btn-go-diet" class="text-xs font-semibold text-brand hover:underline">Abrir Plano Alimentar →</button>
               <button id="save-anamnesis" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold">Salvar Anamnese</button>
             </div>
           </div>
@@ -323,6 +439,31 @@ async function renderProntuario() {
     document.getElementById('new-patient-form').classList.toggle('hidden');
   });
 
+  document.querySelectorAll('[data-approve-pat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const uid = btn.dataset.approvePat;
+      if (typeof ClinicDB.approvePatientRequest === 'function') {
+        await ClinicDB.approvePatientRequest(uid, 'APPROVED');
+      } else {
+        await ClinicDB.update('patients', uid, { approvalStatus: 'APPROVED' });
+      }
+      alert('Paciente aceito! O acesso ao Portal do Paciente foi liberado.');
+      renderProntuario();
+    });
+  });
+
+  document.querySelectorAll('[data-reject-pat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const uid = btn.dataset.rejectPat;
+      if (typeof ClinicDB.approvePatientRequest === 'function') {
+        await ClinicDB.approvePatientRequest(uid, 'REJECTED');
+      } else {
+        await ClinicDB.remove('patients', uid);
+      }
+      renderProntuario();
+    });
+  });
+
   document.getElementById('new-patient-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const created = await ClinicDB.add('patients', {
@@ -355,18 +496,6 @@ async function renderProntuario() {
     document.getElementById('btn-go-diet').addEventListener('click', () => {
       activeTab = 'plano';
       renderTab('plano');
-    });
-
-    document.getElementById('btn-portal-access').addEventListener('click', async () => {
-      const email = prompt('E-mail de acesso para o Portal do Paciente:', patient.email || '');
-      if (!email) return;
-      const password = prompt('Senha inicial do paciente:', '123');
-      if (!password) return;
-      try {
-        await ClinicDB.registerPatientPortalAccess({ patientId: patient.id, patientName: patient.name, email: email.trim(), password });
-        await ClinicDB.update('patients', patient.id, { email: email.trim() });
-        alert(`Acesso liberado! O paciente ja pode entrar com ${email} / ${password}`);
-      } catch (err) { alert(err.message); }
     });
 
     document.getElementById('eval-form').addEventListener('submit', async (e) => {
@@ -420,7 +549,6 @@ async function renderPlanoAlimentar() {
   const patient = patients.find(p => p.id === selectedPatientId) || patients[0];
   const savedPlans = (await ClinicDB.getAll('mealPlans')).filter(pl => !patient || pl.patientId === patient.id);
 
-  // Totais do plano atual
   let totalKcal = 0, totalPtn = 0, totalCho = 0, totalLip = 0, totalFib = 0;
   draftMeals.forEach(m => m.items.forEach(it => {
     const food = TACO_DB.find(f => f.id === it.foodId);
@@ -446,7 +574,6 @@ async function renderPlanoAlimentar() {
         </div>
       </div>
 
-      <!-- RESUMO DE MACROS EM TEMPO REAL -->
       <div class="bg-slate-900 text-white p-5 rounded-2xl grid grid-cols-2 md:grid-cols-5 gap-4 shadow-md">
         <div>
           <p class="text-[11px] text-slate-400 uppercase">Energia Total</p>
@@ -470,7 +597,6 @@ async function renderPlanoAlimentar() {
         </div>
       </div>
 
-      <!-- REFEICOES -->
       <div class="space-y-4">
         ${draftMeals.map((meal, mIdx) => {
           let mKcal = 0;
@@ -523,7 +649,6 @@ async function renderPlanoAlimentar() {
         }).join('')}
       </div>
 
-      <!-- HISTORICO DE PLANOS SALVOS -->
       ${savedPlans.length > 0 ? `
         <div class="space-y-2">
           <h2 class="text-sm font-bold text-slate-600 uppercase">Planos Salvos no Prontuario</h2>
@@ -773,10 +898,17 @@ function printRx(rx) {
 }
 
 // =========================================================================
-// MODULO 4: FINANCEIRO COMPLETO
+// MODULO 4: FINANCEIRO COMPLETO + VALORES DOS PLANOS + SALDO MERCADO PAGO
 // =========================================================================
 async function renderFinanceiro() {
   const list = await ClinicDB.getAll('finance');
+  const cfg = await ClinicDB.getScheduleConfig();
+  const pricing = {
+    consulta: Number(cfg.priceConsulta ?? 250),
+    planoTri: Number(cfg.pricePlanoTri ?? 650),
+    planoSemestral: Number(cfg.pricePlanoSemestral ?? 1150)
+  };
+
   const receitasPagas = list.filter(i => i.type === 'RECEITA' && i.status === 'PAGO').reduce((s, i) => s + Number(i.amount), 0);
   const aReceber = list.filter(i => i.type === 'RECEITA' && i.status === 'PENDENTE').reduce((s, i) => s + Number(i.amount), 0);
   const despesas = list.filter(i => i.type === 'DESPESA').reduce((s, i) => s + Number(i.amount), 0);
@@ -786,9 +918,34 @@ async function renderFinanceiro() {
   document.getElementById('main-view').innerHTML = `
     <div class="space-y-6">
       <div>
-        <h1 class="text-2xl font-bold text-slate-900">Financeiro Completo</h1>
-        <p class="text-sm text-slate-500">Fluxo de caixa, recebimentos e emissao de recibos</p>
+        <h1 class="text-2xl font-bold text-slate-900">Financeiro Completo & Tabela de Planos</h1>
+        <p class="text-sm text-slate-500">Valores de consulta/planos sincronizados com o Portal do Paciente, fluxo de caixa e recibos</p>
       </div>
+
+      <!-- TABELA DE VALORES CONFIGURAVEL PELO PROFISSIONAL -->
+      <form id="pricing-form" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="font-bold text-slate-800 text-sm uppercase">Tabela de Valores (Carrega no App e Portal do Paciente)</h2>
+          <span class="text-xs text-emerald-600 font-semibold">Sincronizacao Automatica</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label class="text-[11px] font-bold text-slate-500 uppercase">Consulta Avulsa (R$)</label>
+            <input id="pr-consulta" type="number" step="0.01" value="${pricing.consulta}" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm font-semibold" />
+          </div>
+          <div>
+            <label class="text-[11px] font-bold text-slate-500 uppercase">Plano Trimestral (R$)</label>
+            <input id="pr-tri" type="number" step="0.01" value="${pricing.planoTri}" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm font-semibold" />
+          </div>
+          <div>
+            <label class="text-[11px] font-bold text-slate-500 uppercase">Plano Semestral (R$)</label>
+            <input id="pr-semestral" type="number" step="0.01" value="${pricing.planoSemestral}" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm font-semibold" />
+          </div>
+          <button type="submit" class="self-end bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl py-2.5 text-sm">
+            Salvar Valores
+          </button>
+        </div>
+      </form>
 
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div class="bg-white p-4 rounded-2xl border shadow-sm">
@@ -809,18 +966,33 @@ async function renderFinanceiro() {
         </div>
       </div>
 
-      <form id="fin-form" class="bg-white p-5 rounded-2xl border shadow-sm grid grid-cols-1 md:grid-cols-6 gap-3">
-        <input id="fin-desc" placeholder="Descricao (ex: Consulta Joao)" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
+      <!-- LANCAMENTO FINANCEIRO COM SELECAO DE PLANO E SALDO MERCADO PAGO -->
+      <form id="fin-form" class="bg-white p-5 rounded-2xl border shadow-sm grid grid-cols-1 md:grid-cols-7 gap-3">
+        <select id="fin-plan-preset" class="px-3 py-2 rounded-xl border text-sm bg-slate-50">
+          <option value="consulta">Consulta (${fmt(pricing.consulta)})</option>
+          <option value="planoTri">Plano Tri (${fmt(pricing.planoTri)})</option>
+          <option value="planoSemestral">Plano Semestral (${fmt(pricing.planoSemestral)})</option>
+          <option value="custom">Outro / Personalizado</option>
+        </select>
+        <input id="fin-desc" value="Consulta Nutricional" placeholder="Descricao" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
         <select id="fin-type" class="px-3 py-2 rounded-xl border text-sm">
           <option value="RECEITA">Receita (+)</option>
           <option value="DESPESA">Despesa (-)</option>
         </select>
-        <input id="fin-amount" type="number" step="0.01" placeholder="Valor R$" required class="px-3 py-2 rounded-xl border text-sm" />
-        <select id="fin-status" class="px-3 py-2 rounded-xl border text-sm">
-          <option value="PAGO">Pago</option>
-          <option value="PENDENTE">Pendente</option>
+        <input id="fin-amount" type="number" step="0.01" value="${pricing.consulta}" placeholder="Valor R$" required class="px-3 py-2 rounded-xl border text-sm" />
+        <select id="fin-method" class="px-3 py-2 rounded-xl border text-sm">
+          <option value="PIX">PIX</option>
+          <option value="CARTAO">Cartao</option>
+          <option value="SALDO_MP">Saldo do Mercado Pago</option>
+          <option value="DINHEIRO">Dinheiro / Transferencia</option>
         </select>
-        <button type="submit" class="bg-brand text-white font-semibold rounded-xl py-2 text-sm">+ Lancar</button>
+        <div class="flex gap-2">
+          <select id="fin-status" class="px-2 py-2 rounded-xl border text-xs flex-1">
+            <option value="PAGO">Pago</option>
+            <option value="PENDENTE">Pendente</option>
+          </select>
+          <button type="submit" class="bg-brand text-white font-semibold rounded-xl px-4 py-2 text-sm">+ Lancar</button>
+        </div>
       </form>
 
       <div class="bg-white rounded-2xl border shadow-sm overflow-x-auto">
@@ -828,6 +1000,7 @@ async function renderFinanceiro() {
           <thead class="bg-slate-50 text-slate-500 text-xs uppercase border-b">
             <tr>
               <th class="p-4">Descricao</th>
+              <th class="p-4">Meio</th>
               <th class="p-4">Data</th>
               <th class="p-4">Valor</th>
               <th class="p-4">Status</th>
@@ -838,6 +1011,7 @@ async function renderFinanceiro() {
             ${list.map(item => `
               <tr class="hover:bg-slate-50">
                 <td class="p-4 font-medium">${item.desc}</td>
+                <td class="p-4 text-xs font-semibold text-slate-600">${item.paymentMethod || 'PIX'}</td>
                 <td class="p-4 text-slate-500">${item.date}</td>
                 <td class="p-4 font-semibold ${item.type === 'RECEITA' ? 'text-emerald-600' : 'text-rose-600'}">
                   ${item.type === 'RECEITA' ? '+' : '-'} ${fmt(Number(item.amount))}
@@ -859,12 +1033,41 @@ async function renderFinanceiro() {
     </div>
   `;
 
+  document.getElementById('pricing-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await ClinicDB.saveScheduleConfig({
+      ...cfg,
+      priceConsulta: parseFloat(document.getElementById('pr-consulta').value) || 0,
+      pricePlanoTri: parseFloat(document.getElementById('pr-tri').value) || 0,
+      pricePlanoSemestral: parseFloat(document.getElementById('pr-semestral').value) || 0
+    });
+    alert('Valores da Consulta, Plano Trimestral e Plano Semestral salvos e sincronizados!');
+    renderFinanceiro();
+  });
+
+  document.getElementById('fin-plan-preset').addEventListener('change', (e) => {
+    const val = e.target.value;
+    const descEl = document.getElementById('fin-desc');
+    const amountEl = document.getElementById('fin-amount');
+    if (val === 'consulta') {
+      descEl.value = 'Consulta Nutricional';
+      amountEl.value = pricing.consulta;
+    } else if (val === 'planoTri') {
+      descEl.value = 'Plano Trimestral';
+      amountEl.value = pricing.planoTri;
+    } else if (val === 'planoSemestral') {
+      descEl.value = 'Plano Semestral';
+      amountEl.value = pricing.planoSemestral;
+    }
+  });
+
   document.getElementById('fin-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     await ClinicDB.add('finance', {
       desc: document.getElementById('fin-desc').value,
       type: document.getElementById('fin-type').value,
       amount: parseFloat(document.getElementById('fin-amount').value),
+      paymentMethod: document.getElementById('fin-method').value,
       status: document.getElementById('fin-status').value,
       date: new Date().toISOString().slice(0, 10)
     });
@@ -895,7 +1098,7 @@ async function renderFinanceiro() {
           <h1 class="text-2xl font-bold text-center uppercase mb-2">Recibo de Honorarios Nutricionais</h1>
           <p class="text-center text-sm text-slate-600 mb-8">${u.clinicName} • ${u.name} (${u.crn})</p>
           <p class="text-lg leading-relaxed mb-6">
-            Recebi a importancia de <b>${fmt(Number(item.amount))}</b> referente a <b>${item.desc}</b>, na data de <b>${item.date}</b>.
+            Recebi a importancia de <b>${fmt(Number(item.amount))}</b> referente a <b>${item.desc}</b> (${item.paymentMethod || 'PIX'}), na data de <b>${item.date}</b>.
           </p>
           <div class="mt-16 text-center">
             <div class="w-64 border-t border-slate-800 mx-auto pt-2 text-sm"><b>${u.name}</b><br/>${u.crn}</div>
@@ -907,18 +1110,22 @@ async function renderFinanceiro() {
 }
 
 // =========================================================================
-// MODULO 5: AGENDA + GOOGLE CALENDAR + .ICS + WHATSAPP
+// MODULO 5: AGENDA + GOOGLE CALENDAR + .ICS + REMARCAR / EXCLUIR CONSULTAS
 // =========================================================================
 async function renderAgenda() {
   const events = await ClinicDB.getAll('agenda');
   const cfg = await ClinicDB.getScheduleConfig();
+  const fmt = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const priceConsulta = Number(cfg.priceConsulta ?? 250);
+  const priceTri = Number(cfg.pricePlanoTri ?? 650);
+  const priceSem = Number(cfg.pricePlanoSemestral ?? 1150);
 
   document.getElementById('main-view').innerHTML = `
     <div class="space-y-6">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-2xl font-bold text-slate-900">Agenda & Autoagendamento</h1>
-          <p class="text-sm text-slate-500">Gerencie consultas, aprove solicitacoes do Portal do Cliente e configure horarios/PIX</p>
+          <p class="text-sm text-slate-500">Gerencie consultas, aprove solicitacoes do Portal do Cliente, remarque ou exclua agendamentos</p>
         </div>
         <button id="toggle-sched-cfg" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold">Configurar Horarios & PIX</button>
       </div>
@@ -929,19 +1136,28 @@ async function renderAgenda() {
         <div><label class="text-[11px] font-bold text-slate-500">Almoco Inicio</label><input id="sc-ls" type="time" value="${cfg.lunchStart}" class="w-full px-2 py-1.5 rounded-lg border text-sm" /></div>
         <div><label class="text-[11px] font-bold text-slate-500">Almoco Fim</label><input id="sc-le" type="time" value="${cfg.lunchEnd}" class="w-full px-2 py-1.5 rounded-lg border text-sm" /></div>
         <div><label class="text-[11px] font-bold text-slate-500">Duracao (min)</label><input id="sc-min" type="number" value="${cfg.slotMinutes}" class="w-full px-2 py-1.5 rounded-lg border text-sm" /></div>
-        <div class="col-span-2 md:col-span-2"><label class="text-[11px] font-bold text-slate-500">URL Backend Mercado Pago</label><input id="sc-mp-url" value="${cfg.mpApiUrl || 'http://localhost:3001'}" placeholder="https://sua-api.onrender.com" class="w-full px-3 py-1.5 rounded-lg border text-sm" /></div>
+        <div class="col-span-2 md:col-span-2"><label class="text-[11px] font-bold text-slate-500">URL Backend Mercado Pago</label><input id="sc-mp-url" value="${cfg.mpApiUrl || 'https://nutricore-backend.onrender.com'}" placeholder="https://sua-api.onrender.com" class="w-full px-3 py-1.5 rounded-lg border text-sm" /></div>
         <div class="col-span-2 md:col-span-2"><label class="text-[11px] font-bold text-slate-500">Chave PIX Reserva</label><input id="sc-pix" value="${cfg.pixKey || ''}" class="w-full px-3 py-1.5 rounded-lg border text-sm" /></div>
         <button type="submit" class="col-span-2 md:col-span-1 self-end bg-brand text-white py-2 rounded-xl text-xs font-bold">Salvar Grade</button>
       </form>
 
-      <form id="agenda-form" class="bg-white p-5 rounded-2xl border shadow-sm grid grid-cols-1 md:grid-cols-5 gap-3">
+      <form id="agenda-form" class="bg-white p-5 rounded-2xl border shadow-sm grid grid-cols-1 md:grid-cols-6 gap-3">
         <input id="ag-patient" placeholder="Nome do Paciente" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
         <input id="ag-date" type="date" value="${new Date().toISOString().slice(0,10)}" required class="px-3 py-2 rounded-xl border text-sm" />
         <input id="ag-time" type="time" value="15:00" required class="px-3 py-2 rounded-xl border text-sm" />
+        <select id="ag-plan" class="px-3 py-2 rounded-xl border text-sm bg-slate-50">
+          <option value="Consulta (${fmt(priceConsulta)})" data-amount="${priceConsulta}">Consulta (${fmt(priceConsulta)})</option>
+          <option value="Plano Trimestral (${fmt(priceTri)})" data-amount="${priceTri}">Plano Tri (${fmt(priceTri)})</option>
+          <option value="Plano Semestral (${fmt(priceSem)})" data-amount="${priceSem}">Plano Semestral (${fmt(priceSem)})</option>
+        </select>
         <button type="submit" class="bg-brand text-white font-semibold rounded-xl py-2 text-sm">+ Agendar</button>
         <input id="ag-phone" placeholder="WhatsApp (ex: 21999990000)" class="px-3 py-2 rounded-xl border text-sm" />
-        <input id="ag-type" placeholder="Tipo (ex: Consulta / Bioimpedancia)" class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
-        <input id="ag-notes" placeholder="Observacoes / Link chamada" class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
+        <select id="ag-pay-method" class="px-3 py-2 rounded-xl border text-sm">
+          <option value="PIX">PIX</option>
+          <option value="CARTAO">Cartao</option>
+          <option value="SALDO_MP">Saldo do Mercado Pago</option>
+        </select>
+        <input id="ag-notes" placeholder="Observacoes / Link chamada" class="md:col-span-4 px-3 py-2 rounded-xl border text-sm" />
       </form>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -951,16 +1167,23 @@ async function renderAgenda() {
           return `
             <div class="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between gap-4">
               <div>
-                <div class="flex items-center justify-between">
+                <div class="flex items-center justify-between gap-2">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">${ev.date} as ${ev.time}</span>
-                    ${ev.status ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${ev.status}</span>` : ''}
+                    ${ev.status ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : ev.status === 'REMARCADO' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}">${ev.status}</span>` : ''}
                     ${ev.status && ev.status !== 'CONFIRMADO' ? `<button data-approve-ag="${ev.id}" class="text-xs font-bold text-brand hover:underline">✓ Aprovar</button>` : ''}
                   </div>
-                  <button data-del-ag="${ev.id}" class="text-xs text-rose-500 hover:underline">Cancelar</button>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <button data-reschedule-ag="${ev.id}" class="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold">
+                      Remarcar
+                    </button>
+                    <button data-del-ag="${ev.id}" class="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold">
+                      Excluir
+                    </button>
+                  </div>
                 </div>
                 <h3 class="font-bold text-lg text-slate-900 mt-2">${ev.patientName}</h3>
-                <p class="text-sm text-slate-600">${ev.type || 'Consulta Nutricional'}</p>
+                <p class="text-sm text-slate-600">${ev.type || 'Consulta Nutricional'} ${ev.amount ? `• <b>${fmt(ev.amount)}</b>` : ''} ${ev.paymentMethod ? `(${ev.paymentMethod})` : ''}</p>
                 ${ev.notes ? `<p class="text-xs text-slate-400 mt-1">${ev.notes}</p>` : ''}
               </div>
               <div class="flex flex-wrap gap-2 pt-3 border-t">
@@ -983,13 +1206,20 @@ async function renderAgenda() {
 
   document.getElementById('agenda-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const planSel = document.getElementById('ag-plan');
+    const selectedOpt = planSel.options[planSel.selectedIndex];
+    const amount = Number(selectedOpt?.dataset?.amount || priceConsulta);
+
     await ClinicDB.add('agenda', {
       patientName: document.getElementById('ag-patient').value,
       phone: document.getElementById('ag-phone').value,
       date: document.getElementById('ag-date').value,
       time: document.getElementById('ag-time').value,
-      type: document.getElementById('ag-type').value || 'Consulta Nutricional',
-      notes: document.getElementById('ag-notes').value
+      type: planSel.value,
+      amount,
+      paymentMethod: document.getElementById('ag-pay-method').value,
+      notes: document.getElementById('ag-notes').value,
+      status: 'CONFIRMADO'
     });
     renderAgenda();
   });
@@ -1018,8 +1248,28 @@ async function renderAgenda() {
       renderAgenda();
     });
   });
+  document.querySelectorAll('[data-reschedule-ag]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ev = events.find(e => e.id === btn.dataset.rescheduleAg);
+      if (!ev) return;
+      const newDate = prompt('Nova data da consulta (AAAA-MM-DD):', ev.date);
+      if (!newDate) return;
+      const newTime = prompt('Novo horario (HH:MM):', ev.time);
+      if (!newTime) return;
+      await ClinicDB.update('agenda', ev.id, {
+        date: newDate.trim(),
+        time: newTime.trim(),
+        status: 'REMARCADO'
+      });
+      renderAgenda();
+    });
+  });
   document.querySelectorAll('[data-del-ag]').forEach(btn => {
-    btn.addEventListener('click', async () => { await ClinicDB.remove('agenda', btn.dataset.delAg); renderAgenda(); });
+    btn.addEventListener('click', async () => {
+      if (!confirm('Deseja realmente excluir esta consulta?')) return;
+      await ClinicDB.remove('agenda', btn.dataset.delAg);
+      renderAgenda();
+    });
   });
   document.querySelectorAll('[data-ics]').forEach(btn => {
     btn.addEventListener('click', () => {
