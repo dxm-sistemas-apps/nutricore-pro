@@ -139,6 +139,7 @@ export const ClinicDB = {
     }
   },
 
+  // Autocadastro do Paciente usando a instancia principal fb.auth / fb.db (sem secondaryApp)
   async registerPatientSelf({ clinicIdentifier, name, phone, email, password }) {
     const clinicId = String(clinicIdentifier || 'clinica_dra_clara').trim();
     const cleanEmail = String(email || '').trim().toLowerCase();
@@ -146,55 +147,49 @@ export const ClinicDB = {
 
     if (USE_FIREBASE) {
       await initFirebaseIfNeeded();
-      const secondaryApp = fb.appMod.initializeApp(FIREBASE_CONFIG, `PatientReg_${Date.now()}`);
-      const secondaryAuth = fb.authMod.getAuth(secondaryApp);
-      const secondaryDb = fb.fsMod.getFirestore(secondaryApp);
+      const cred = await fb.authMod.createUserWithEmailAndPassword(fb.auth, cleanEmail, password);
+      const uid = cred.user.uid;
+      await cred.user.getIdToken(true);
+
+      let clinicData = {};
+      try {
+        const clinicSnap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId));
+        if (clinicSnap.exists()) clinicData = clinicSnap.data();
+      } catch (_) {}
+
+      const patientProfile = {
+        uid,
+        patientId: uid,
+        clinicId,
+        clinicName: clinicData.clinicName || clinicId,
+        name: clinicData.name || 'Profissional',
+        crn: clinicData.crn || '',
+        phone: clinicData.phone || '',
+        primaryColor: clinicData.primaryColor || '#059669',
+        userName: name.trim(),
+        patientName: name.trim(),
+        patientPhone: String(phone || '').trim(),
+        email: cleanEmail,
+        role: 'PACIENTE',
+        approvalStatus: 'PENDING',
+        createdAt: now
+      };
 
       try {
-        const cred = await fb.authMod.createUserWithEmailAndPassword(secondaryAuth, cleanEmail, password);
-        const uid = cred.user.uid;
-        await cred.user.getIdToken(true);
-
-        let clinicData = {};
-        try {
-          const clinicSnap = await fb.fsMod.getDoc(fb.fsMod.doc(secondaryDb, 'clinics', clinicId));
-          if (clinicSnap.exists()) clinicData = clinicSnap.data();
-        } catch (_) {}
-
-        const patientProfile = {
-          uid,
-          patientId: uid,
-          clinicId,
-          clinicName: clinicData.clinicName || clinicId,
-          name: clinicData.name || 'Profissional',
-          crn: clinicData.crn || '',
-          phone: clinicData.phone || '',
-          primaryColor: clinicData.primaryColor || '#059669',
-          userName: name.trim(),
-          patientName: name.trim(),
-          patientPhone: String(phone || '').trim(),
-          email: cleanEmail,
-          role: 'PACIENTE',
-          approvalStatus: 'PENDING',
-          createdAt: now
-        };
-
-        await fb.fsMod.setDoc(fb.fsMod.doc(secondaryDb, 'users', uid), patientProfile);
-        await fb.fsMod.setDoc(fb.fsMod.doc(secondaryDb, 'clinics', clinicId, 'patientRequests', uid), {
+        await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'users', uid), patientProfile);
+        await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId, 'patientRequests', uid), {
           ...patientProfile,
           requestedAt: now
         });
-
-        await fb.authMod.signOut(secondaryAuth).catch(() => {});
-        return patientProfile;
       } catch (err) {
-        if (secondaryAuth.currentUser) {
-          await secondaryAuth.currentUser.delete().catch(() => {});
-        }
+        await cred.user.delete().catch(() => {});
         throw err;
-      } finally {
-        await fb.appMod.deleteApp(secondaryApp).catch(() => {});
       }
+
+      // Desloga apos criar para aguardar aceite do profissional sem deixar sessao pendente
+      await fb.authMod.signOut(fb.auth).catch(() => {});
+      this.currentSession = null;
+      return patientProfile;
     } else {
       this._seedLocalAccounts();
       this._ensureClinicSeed(clinicId);
