@@ -1,13 +1,16 @@
 // www/js/patient-portal.js
 // Portal Completo do Cliente (Paciente): Dieta + Substituicoes + Check-in + Agua + Lista de Compras
-// + Autoagendamento (Valores Configurados + Saldo Mercado Pago + Remarcar/Excluir) + Evolucao + Docs + Chat
+// + Autoagendamento com Calendario Mensal (1a Vez, Retorno, Plano Tri, Semestral + Saldo MP + Remarcar/Excluir)
 
 import { ClinicDB } from './db.js';
 import { PAYMENT_API_URL } from './firebase-config.js';
 import { TACO_DB, getSubstitutes } from './taco.js';
+import { renderCalendarGrid, formatModalityBadge } from './calendar-ui.js';
 
 let pTab = 'dieta';
 let selectedBookingDate = new Date().toISOString().slice(0, 10);
+let patientCalYear = new Date().getFullYear();
+let patientCalMonth = new Date().getMonth();
 let selectedSlot = null;
 let showShoppingList = false;
 let activePixCharge = null;
@@ -34,7 +37,7 @@ export function mountPatientPortal({ printDocument, buildGoogleCalendarUrl, down
             <i data-lucide="utensils" class="w-5 h-5"></i> Minha Dieta & Rotina
           </button>
           <button data-ptab="agendar" class="pnav-btn w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-800 transition">
-            <i data-lucide="calendar-plus" class="w-5 h-5"></i> Agendar Consulta
+            <i data-lucide="calendar-plus" class="w-5 h-5"></i> Agenda & Consultas
           </button>
           <button data-ptab="evolucao" class="pnav-btn w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-800 transition">
             <i data-lucide="trending-up" class="w-5 h-5"></i> Minha Evolucao
@@ -59,7 +62,7 @@ export function mountPatientPortal({ printDocument, buildGoogleCalendarUrl, down
       <header class="md:hidden bg-slate-900 text-white px-4 py-3 flex items-center justify-between sticky top-0 z-20">
         <div>
           <h2 class="font-bold text-sm">${u.clinicName}</h2>
-          <p class="text-[11px] text-slate-400">Portal do Paciente • ${u.userName || u.name}</p>
+          <p class="text-[11px] text-slate-400">App do Paciente • ${u.userName || u.name}</p>
         </div>
         <button id="p-logout-mob" class="p-2 rounded-lg bg-slate-800 text-slate-300"><i data-lucide="log-out" class="w-4 h-4"></i></button>
       </header>
@@ -68,7 +71,7 @@ export function mountPatientPortal({ printDocument, buildGoogleCalendarUrl, down
 
     <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 grid grid-cols-5 py-1.5 z-30 shadow-lg">
       <button data-ptab="dieta" class="pnav-btn flex flex-col items-center text-[10px] text-slate-500 py-1"><i data-lucide="utensils" class="w-4 h-4 mb-0.5"></i>Dieta</button>
-      <button data-ptab="agendar" class="pnav-btn flex flex-col items-center text-[10px] text-slate-500 py-1"><i data-lucide="calendar-plus" class="w-4 h-4 mb-0.5"></i>Agendar</button>
+      <button data-ptab="agendar" class="pnav-btn flex flex-col items-center text-[10px] text-slate-500 py-1"><i data-lucide="calendar-plus" class="w-4 h-4 mb-0.5"></i>Agenda</button>
       <button data-ptab="evolucao" class="pnav-btn flex flex-col items-center text-[10px] text-slate-500 py-1"><i data-lucide="trending-up" class="w-4 h-4 mb-0.5"></i>Evolucao</button>
       <button data-ptab="docs" class="pnav-btn flex flex-col items-center text-[10px] text-slate-500 py-1"><i data-lucide="file-text" class="w-4 h-4 mb-0.5"></i>Docs</button>
       <button data-ptab="chat" class="pnav-btn flex flex-col items-center text-[10px] text-slate-500 py-1"><i data-lucide="message-circle" class="w-4 h-4 mb-0.5"></i>Chat</button>
@@ -265,7 +268,7 @@ async function renderMinhaDieta(ctx) {
 }
 
 // =========================================================================
-// 2. AUTOAGENDAMENTO (VALORES DO PROFISSIONAL + SALDO MP + REMARCAR/EXCLUIR)
+// 2. AUTOAGENDAMENTO (CALENDARIO + 1a VEZ / RETORNO / TRI / SEMESTRAL + SALDO MP + REMARCAR/EXCLUIR)
 // =========================================================================
 function generateSlots(cfg) {
   const slots = [];
@@ -291,15 +294,16 @@ async function renderAutoAgendamento(ctx) {
   const busy = await ClinicDB.getAll('busySlots');
   const myEvents = (await ClinicDB.getAll('agenda')).filter(e => e.patientId === u.patientId);
 
-  const priceConsulta = Number(cfg.priceConsulta ?? 250);
+  const pricePrimeira = Number(cfg.priceConsultaPrimeira ?? cfg.priceConsulta ?? 300);
+  const priceRetorno = Number(cfg.priceConsultaRetorno ?? 200);
   const priceTri = Number(cfg.pricePlanoTri ?? 650);
   const priceSem = Number(cfg.pricePlanoSemestral ?? 1150);
 
   const optionsList = [
-    { id: 'consulta', name: 'Consulta Nutricional', price: priceConsulta },
-    { id: 'planoTri', name: 'Plano Trimestral', price: priceTri },
-    { id: 'planoSemestral', name: 'Plano Semestral', price: priceSem },
-    ...(cfg.services || [])
+    { id: 'PRIMEIRA_VEZ', name: 'Consulta 1a Vez', price: pricePrimeira },
+    { id: 'RETORNO', name: 'Retorno', price: priceRetorno },
+    { id: 'PLANO_TRI', name: 'Plano Trimestral', price: priceTri },
+    { id: 'PLANO_SEMESTRAL', name: 'Plano Semestral', price: priceSem }
   ];
 
   const dayOfWeek = new Date(selectedBookingDate + 'T12:00:00').getDay();
@@ -311,15 +315,19 @@ async function renderAutoAgendamento(ctx) {
   document.getElementById('patient-view').innerHTML = `
     <div class="space-y-6">
       <div>
-        <h1 class="text-2xl font-bold text-slate-900">Agendar Consulta & Planos</h1>
-        <p class="text-sm text-slate-500">Escolha uma data e um horario disponivel na agenda da ${u.clinicName}</p>
+        <h1 class="text-2xl font-bold text-slate-900">Agenda & Consultas</h1>
+        <p class="text-sm text-slate-500">Veja no calendario seus horarios agendados (1a vez, retorno, plano tri ou semestral) e dias livres</p>
       </div>
 
       <!-- TABELA DE VALORES DEFINIDOS PELO PROFISSIONAL -->
-      <div class="grid grid-cols-3 gap-3">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
-          <p class="text-[11px] font-bold uppercase text-slate-400">Consulta</p>
-          <p class="text-lg font-bold text-slate-900">R$ ${priceConsulta.toFixed(2)}</p>
+          <p class="text-[11px] font-bold uppercase text-slate-400">Consulta 1a Vez</p>
+          <p class="text-lg font-bold text-slate-900">R$ ${pricePrimeira.toFixed(2)}</p>
+        </div>
+        <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+          <p class="text-[11px] font-bold uppercase text-slate-400">Retorno</p>
+          <p class="text-lg font-bold text-slate-900">R$ ${priceRetorno.toFixed(2)}</p>
         </div>
         <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
           <p class="text-[11px] font-bold uppercase text-slate-400">Plano Trimestral</p>
@@ -331,16 +339,27 @@ async function renderAutoAgendamento(ctx) {
         </div>
       </div>
 
+      <!-- CALENDARIO MENSAL DO PACIENTE -->
+      ${renderCalendarGrid({
+        year: patientCalYear,
+        month: patientCalMonth,
+        selectedDate: selectedBookingDate,
+        events: myEvents,
+        busySlots: busy,
+        scheduleCfg: cfg,
+        mode: 'PATIENT'
+      })}
+
       <div class="bg-white p-6 rounded-2xl border shadow-sm space-y-5">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label class="text-xs font-bold uppercase text-slate-500">1. Escolha a Data</label>
+            <label class="text-xs font-bold uppercase text-slate-500">1. Data Selecionada</label>
             <input id="bk-date" type="date" value="${selectedBookingDate}" min="${new Date().toISOString().slice(0,10)}"
               class="w-full mt-1 px-3 py-2.5 rounded-xl border text-sm font-medium" />
           </div>
           <div>
-            <label class="text-xs font-bold uppercase text-slate-500">2. Tipo de Atendimento / Plano</label>
-            <select id="bk-service" class="w-full mt-1 px-3 py-2.5 rounded-xl border text-sm">
+            <label class="text-xs font-bold uppercase text-slate-500">2. Modalidade / Plano</label>
+            <select id="bk-service" class="w-full mt-1 px-3 py-2.5 rounded-xl border text-sm font-medium">
               ${optionsList.map(s => `<option value="${s.id}" data-price="${s.price}" data-name="${s.name}">${s.name} — R$ ${Number(s.price).toFixed(2)}</option>`).join('')}
             </select>
           </div>
@@ -349,7 +368,7 @@ async function renderAutoAgendamento(ctx) {
         <div>
           <label class="text-xs font-bold uppercase text-slate-500">3. Horarios Livres (${selectedBookingDate})</label>
           <div class="mt-2 flex flex-wrap gap-2">
-            ${!isOpenDay ? '<p class="text-sm text-amber-600">A clinica nao atende neste dia da semana. Selecione outra data.</p>' :
+            ${!isOpenDay ? '<p class="text-sm text-amber-600">A clinica nao atende neste dia da semana. Selecione outro dia livre no calendario.</p>' :
               freeSlots.length === 0 ? '<p class="text-sm text-rose-500">Todos os horarios desta data estao ocupados.</p>' :
               freeSlots.map(slot => `
                 <button type="button" data-pick-slot="${slot}" class="px-4 py-2 rounded-xl text-sm font-bold border transition ${selectedSlot === slot ? 'bg-brand text-white border-transparent shadow' : 'bg-slate-50 hover:bg-emerald-50 text-slate-700'}">
@@ -413,27 +432,58 @@ async function renderAutoAgendamento(ctx) {
       <!-- MEUS AGENDAMENTOS COM REMARCAR E EXCLUIR -->
       <div class="space-y-3">
         <h2 class="text-sm font-bold uppercase text-slate-600">Meus Agendamentos</h2>
-        ${myEvents.length === 0 ? '<p class="text-sm text-slate-400">Voce ainda nao possui consultas agendadas.</p>' : myEvents.map(ev => `
-          <div class="bg-white p-4 rounded-2xl border shadow-sm flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div class="flex items-center gap-2">
-                <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : ev.status === 'REMARCADO' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}">${ev.status || 'AGUARDANDO'}</span>
-                <span class="text-xs font-semibold text-slate-500">${ev.date} as ${ev.time}</span>
+        ${myEvents.length === 0 ? '<p class="text-sm text-slate-400">Voce ainda nao possui consultas agendadas.</p>' : myEvents.map(ev => {
+          const modLabel = ev.modalityLabel || formatModalityBadge(ev.modality) || ev.type || 'Consulta';
+          return `
+            <div class="bg-white p-4 rounded-2xl border shadow-sm flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : ev.status === 'REMARCADO' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}">${ev.status || 'AGUARDANDO'}</span>
+                  <span class="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold">${modLabel}</span>
+                  <span class="text-xs font-semibold text-slate-500">${ev.date} as ${ev.time}</span>
+                </div>
+                <p class="font-bold text-slate-800 mt-1">${modLabel}</p>
+                <p class="text-xs text-slate-500">${ev.checkoutMode || 'Pagar na Clinica'} ${ev.amount ? '• R$ ' + Number(ev.amount).toFixed(2) : ''}</p>
               </div>
-              <p class="font-bold text-slate-800 mt-1">${ev.type}</p>
-              <p class="text-xs text-slate-500">${ev.checkoutMode || 'Pagar na Clinica'} ${ev.amount ? '• R$ ' + Number(ev.amount).toFixed(2) : ''}</p>
+              <div class="flex flex-wrap gap-2">
+                <button data-p-reschedule="${ev.id}" class="px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold">Remarcar</button>
+                <button data-p-delete="${ev.id}" class="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold">Excluir</button>
+                <a href="${ctx.buildGoogleCalendarUrl(ev)}" target="_blank" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold">Google Calendar</a>
+                <button data-p-ics="${ev.id}" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">.ICS</button>
+              </div>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <button data-p-reschedule="${ev.id}" class="px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold">Remarcar</button>
-              <button data-p-delete="${ev.id}" class="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold">Excluir</button>
-              <a href="${ctx.buildGoogleCalendarUrl(ev)}" target="_blank" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold">Google Calendar</a>
-              <button data-p-ics="${ev.id}" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">.ICS</button>
-            </div>
-          </div>
-        `).join('')}
+          `;
+        }).join('')}
       </div>
     </div>
   `;
+
+  document.querySelectorAll('[data-cal-day]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedBookingDate = btn.dataset.calDay;
+      selectedSlot = null;
+      renderAutoAgendamento(ctx);
+    });
+  });
+
+  document.querySelectorAll('[data-cal-nav]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const delta = Number(btn.dataset.calNav);
+      const d = new Date(patientCalYear, patientCalMonth + delta, 1);
+      patientCalYear = d.getFullYear();
+      patientCalMonth = d.getMonth();
+      renderAutoAgendamento(ctx);
+    });
+  });
+
+  document.querySelector('[data-cal-today]')?.addEventListener('click', () => {
+    const now = new Date();
+    patientCalYear = now.getFullYear();
+    patientCalMonth = now.getMonth();
+    selectedBookingDate = now.toISOString().slice(0, 10);
+    selectedSlot = null;
+    renderAutoAgendamento(ctx);
+  });
 
   document.getElementById('bk-date').addEventListener('change', (e) => {
     selectedBookingDate = e.target.value;
@@ -475,8 +525,9 @@ async function renderAutoAgendamento(ctx) {
     if (!selectedSlot) return alert('Selecione um horario livre primeiro.');
     const srvSel = document.getElementById('bk-service');
     const opt = srvSel.options[srvSel.selectedIndex];
-    const srvName = opt?.dataset?.name || 'Consulta Nutricional';
-    const srvPrice = Number(opt?.dataset?.price || priceConsulta);
+    const modality = srvSel.value;
+    const srvName = opt?.dataset?.name || 'Consulta 1a Vez';
+    const srvPrice = Number(opt?.dataset?.price || pricePrimeira);
     const payMode = document.getElementById('bk-pay').value;
     const notes = document.getElementById('bk-notes').value.trim();
 
@@ -495,6 +546,8 @@ async function renderAutoAgendamento(ctx) {
       patientName: u.userName || u.name,
       date: selectedBookingDate,
       time: selectedSlot,
+      modality,
+      modalityLabel: srvName,
       type: srvName,
       amount: srvPrice,
       checkoutMode: modeLabel,
@@ -507,6 +560,7 @@ async function renderAutoAgendamento(ctx) {
       desc: `${srvName} - ${u.userName || u.name}`,
       type: 'RECEITA',
       amount: srvPrice,
+      paymentMethod: modeLabel,
       date: selectedBookingDate,
       status: 'PENDENTE'
     });
@@ -572,6 +626,7 @@ async function renderAutoAgendamento(ctx) {
       const newTime = prompt('Novo horario (HH:MM):', ev.time);
       if (!newTime) return;
       await ClinicDB.update('agenda', ev.id, { date: newDate.trim(), time: newTime.trim(), status: 'REMARCADO' });
+      selectedBookingDate = newDate.trim();
       renderAutoAgendamento(ctx);
     });
   });

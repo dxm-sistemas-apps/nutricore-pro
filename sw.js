@@ -1,40 +1,50 @@
-const CACHE_NAME = 'nutricore-pro-v4.0.0';
-const ASSETS = [
+const CACHE_NAME = 'nutricore-pro-auto-v2';
+const CORE_ASSETS = [
   './',
   './index.html',
+  './paciente.html',
   './manifest.json',
-  './js/firebase-config.js',
+  './manifest-paciente.json',
+  './js/app.js',
+  './js/patient-app.js',
+  './js/patient-portal.js',
+  './js/calendar-ui.js',
   './js/db.js',
   './js/taco.js',
-  './js/patient-portal.js',
-  './js/app.js'
+  './js/firebase-config.js'
 ];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS).catch(() => {}))
+  );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) return;
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+    fetch(req, { cache: 'no-store' })
+      .then((networkRes) => {
+        if (networkRes && networkRes.status === 200) {
+          const copy = networkRes.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
         }
-        return response;
+        return networkRes;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(req))
   );
 });

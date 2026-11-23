@@ -23,7 +23,7 @@
 </head>
 <body class="bg-slate-50 text-slate-800 antialiased selection:bg-emerald-100">
 
-  <!-- TELA DE LOGIN / CADASTRO MULTI-TENANT -->
+  <!-- TELA EXCLUSIVA DE LOGIN / CADASTRO PROFISSIONAL & CLINICA -->
   <div id="auth-screen" class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950">
     <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-7">
       <div class="flex items-center gap-3 mb-5">
@@ -32,25 +32,13 @@
         </div>
         <div>
           <h1 class="text-2xl font-bold text-slate-900">NutriCore Pro</h1>
-          <p id="auth-mode-badge" class="text-xs text-slate-500">Multi-Tenant • Offline-First</p>
+          <p id="auth-mode-badge" class="text-xs text-slate-500">App Profissional & Clinica</p>
         </div>
-      </div>
-
-      <!-- ESCOLHA DE PERFIL: PROFISSIONAL/CLINICA OU PACIENTE -->
-      <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl mb-4">
-        <button type="button" data-auth-role="PROFISSIONAL"
-          class="auth-role-btn py-2 px-3 rounded-lg text-xs font-bold bg-emerald-600 text-white shadow transition">
-          Profissional / Clinica
-        </button>
-        <button type="button" data-auth-role="PACIENTE"
-          class="auth-role-btn py-2 px-3 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">
-          Paciente
-        </button>
       </div>
 
       <form id="login-form" class="space-y-4">
         <div>
-          <label id="login-email-label" class="text-xs font-semibold text-slate-600 uppercase">E-mail Profissional</label>
+          <label class="text-xs font-semibold text-slate-600 uppercase">E-mail Profissional</label>
           <input type="email" id="login-email" value="clara@nutri.com" required
             class="w-full mt-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none" />
         </div>
@@ -59,7 +47,7 @@
           <input type="password" id="login-pass" value="123" required
             class="w-full mt-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none" />
         </div>
-        <button type="submit" id="login-submit-btn"
+        <button type="submit"
           class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-md transition">
           Entrar no Consultorio
         </button>
@@ -69,14 +57,12 @@
         <p class="font-semibold text-slate-700">Contas Demo Locais (Dados 100% Isolados):</p>
         <p>• <b>clara@nutri.com</b> / senha: <b>123</b> (Clinica Equilibrio)</p>
         <p>• <b>marcos@nutri.com</b> / senha: <b>123</b> (Instituto Performance)</p>
-        <p>• <b>ana@paciente.com</b> / senha: <b>123</b> (<b>Portal do Cliente / Paciente</b>)</p>
       </div>
 
       <button id="toggle-register" type="button" class="w-full mt-4 text-sm text-emerald-700 font-medium hover:underline">
         Cadastrar novo profissional / clinica isolada
       </button>
 
-      <!-- CADASTRO PROFISSIONAL / CLINICA -->
       <form id="register-form" class="hidden space-y-3 mt-4 pt-4 border-t">
         <input id="reg-clinic" placeholder="Nome da Clinica" required class="w-full px-3 py-2 rounded-lg border text-sm" />
         <input id="reg-name" placeholder="Seu Nome (ex: Dra. Julia Lima)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
@@ -93,20 +79,11 @@
         </button>
       </form>
 
-      <!-- AUTOCADASTRO DO PACIENTE (ENVIA PARA ACEITE AUTOMATICO NO FIREBASE) -->
-      <form id="register-patient-form" class="hidden space-y-3 mt-4 pt-4 border-t">
-        <input id="reg-pat-clinic" placeholder="Codigo ou E-mail da Clinica" required class="w-full px-3 py-2 rounded-lg border text-sm" />
-        <input id="reg-pat-name" placeholder="Seu Nome Completo" required class="w-full px-3 py-2 rounded-lg border text-sm" />
-        <input id="reg-pat-phone" placeholder="Seu WhatsApp (ex: 21999998888)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
-        <input id="reg-pat-email" type="email" placeholder="Seu E-mail de acesso" required class="w-full px-3 py-2 rounded-lg border text-sm" />
-        <input id="reg-pat-pass" type="password" placeholder="Crie sua Senha (min. 6 caracteres)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
-        <p class="text-[11px] text-slate-500">
-          Ao criar sua conta, seu cadastro sera enviado automaticamente para o profissional aceitar seu acesso.
-        </p>
-        <button type="submit" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm">
-          Criar Minha Conta de Paciente
-        </button>
-      </form>
+      <div class="mt-5 pt-3 border-t text-center">
+        <a href="./paciente.html" class="text-xs text-slate-400 hover:text-slate-600">
+          Sou Paciente → Acessar App do Paciente
+        </a>
+      </div>
     </div>
   </div>
 
@@ -121,6 +98,7 @@
           <div class="overflow-hidden">
             <h2 id="nav-clinic-name" class="font-bold text-white text-sm truncate">Clinica</h2>
             <p id="nav-prof-name" class="text-xs text-slate-400 truncate">Profissional</p>
+            <p id="nav-clinic-id" class="text-[10px] text-emerald-400 font-mono truncate mt-0.5"></p>
           </div>
         </div>
         <nav class="mt-5 space-y-1">
@@ -149,6 +127,9 @@
         <div id="net-status" class="flex items-center gap-2 text-xs text-emerald-400">
           <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Online
         </div>
+        <button id="btn-copy-clinic-id" type="button" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 text-xs transition">
+          <i data-lucide="copy" class="w-4 h-4"></i> Copiar Codigo da Clinica
+        </button>
         <button id="btn-whitelabel" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs transition">
           <i data-lucide="palette" class="w-4 h-4"></i> Personalizar Marca
         </button>
@@ -166,6 +147,7 @@
           <p id="mob-prof-name" class="text-[11px] text-slate-400 truncate">CRN</p>
         </div>
         <div class="flex items-center gap-2">
+          <button id="btn-copy-clinic-id-mob" title="Copiar Codigo da Clinica" class="p-2 rounded-lg bg-emerald-900 text-emerald-200"><i data-lucide="copy" class="w-4 h-4"></i></button>
           <button id="btn-whitelabel-mob" class="p-2 rounded-lg bg-slate-800 text-slate-300"><i data-lucide="palette" class="w-4 h-4"></i></button>
           <button id="btn-logout-mob" class="p-2 rounded-lg bg-slate-800 text-slate-300"><i data-lucide="log-out" class="w-4 h-4"></i></button>
         </div>
@@ -203,6 +185,10 @@
   <div id="wl-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 no-print">
     <form id="wl-form" class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
       <h3 class="text-lg font-bold text-slate-900">Personalizacao da Clinica (White-Label)</h3>
+      <div>
+        <label class="text-xs font-semibold text-slate-500 uppercase">Codigo da Clinica (envie ao paciente)</label>
+        <input id="wl-clinic-id" readonly class="w-full mt-1 px-3 py-2 rounded-xl border bg-slate-100 font-mono text-xs text-slate-700" />
+      </div>
       <div>
         <label class="text-xs font-semibold text-slate-500 uppercase">Nome da Clinica</label>
         <input id="wl-clinic" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm" />

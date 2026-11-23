@@ -24,21 +24,18 @@ async function initFirebaseIfNeeded() {
 }
 
 export const DEFAULT_SCHEDULE = {
-  days: [1, 2, 3, 4, 5], // Seg a Sex
+  days: [1, 2, 3, 4, 5],
   startHour: '08:00',
   endHour: '18:00',
   lunchStart: '12:00',
   lunchEnd: '13:00',
   slotMinutes: 60,
   pixKey: 'clinica@pix.com.br',
-  priceConsulta: 250,
+  priceConsultaPrimeira: 300,
+  priceConsultaRetorno: 200,
   pricePlanoTri: 650,
   pricePlanoSemestral: 1150,
-  services: [
-    { id: 'srv1', name: 'Consulta Inicial (Presencial)', price: 350 },
-    { id: 'srv2', name: 'Retorno / Reavaliacao', price: 220 },
-    { id: 'srv3', name: 'Consulta Online (Telemedicina)', price: 280 }
-  ]
+  services: []
 };
 
 export const ClinicDB = {
@@ -82,8 +79,8 @@ export const ClinicDB = {
       if (expectedRole && profile.role && profile.role !== expectedRole) {
         throw new Error(
           expectedRole === 'PACIENTE'
-            ? 'Esta conta nao e de Paciente. Selecione "Profissional / Clinica" acima.'
-            : 'Esta conta nao e de Profissional/Clinica. Selecione "Paciente" acima.'
+            ? 'Esta conta pertence a um Profissional/Clinica. Utilize o App da Clinica.'
+            : 'Esta conta pertence a um Paciente. Utilize o App do Paciente.'
         );
       }
       this.currentSession = profile;
@@ -96,8 +93,8 @@ export const ClinicDB = {
       if (expectedRole && user.role && user.role !== expectedRole) {
         throw new Error(
           expectedRole === 'PACIENTE'
-            ? 'Esta conta e de Profissional/Clinica. Troque a aba acima para entrar.'
-            : 'Esta conta e de Paciente. Troque a aba acima para entrar.'
+            ? 'Esta conta e de Profissional/Clinica. Utilize o App da Clinica.'
+            : 'Esta conta e de Paciente. Utilize o App do Paciente.'
         );
       }
       this._ensureClinicSeed(user.clinicId);
@@ -140,7 +137,6 @@ export const ClinicDB = {
     }
   },
 
-  // Autocadastro automatico do Paciente: cria login e senha no Firebase e envia para aceite do profissional
   async registerPatientSelf({ clinicIdentifier, name, phone, email, password }) {
     const clinicId = (clinicIdentifier || 'clinica_dra_clara').trim();
     const now = new Date().toISOString();
@@ -285,28 +281,6 @@ export const ClinicDB = {
           localStorage.setItem(`${DB_PREFIX}${cid}_patients`, JSON.stringify(pats));
         }
       }
-    }
-  },
-
-  async registerPatientPortalAccess({ patientId, patientName, email, password }) {
-    const u = this.currentSession;
-    if (!email || !password) return;
-    if (USE_FIREBASE) {
-      throw new Error('No modo Firebase, o proprio paciente cria seu login e senha na tela inicial e voce aceita no Prontuario.');
-    } else {
-      const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
-      const idx = accounts.findIndex(a => a.email.toLowerCase() === email.toLowerCase());
-      const rec = {
-        clinicId: u.clinicId,
-        patientId,
-        name: patientName,
-        email,
-        password,
-        role: 'PACIENTE',
-        approvalStatus: 'APPROVED'
-      };
-      if (idx >= 0) accounts[idx] = rec; else accounts.push(rec);
-      localStorage.setItem(`${DB_PREFIX}accounts`, JSON.stringify(accounts));
     }
   },
 
@@ -467,13 +441,28 @@ export const ClinicDB = {
     ]);
 
     save('finance', [
-      { id: 'f1', patientId: 'p1', desc: 'Consulta Inicial - Ana Beatriz', type: 'RECEITA', amount: 350, date: today, status: 'PAGO', createdAt: new Date().toISOString() },
-      { id: 'f2', patientId: 'p2', desc: 'Retorno - Rafael Oliveira', type: 'RECEITA', amount: 220, date: today, status: 'PENDENTE', createdAt: new Date().toISOString() },
+      { id: 'f1', patientId: 'p1', desc: 'Consulta 1a Vez - Ana Beatriz', type: 'RECEITA', amount: 300, paymentMethod: 'PIX', date: today, status: 'PAGO', createdAt: new Date().toISOString() },
+      { id: 'f2', patientId: 'p2', desc: 'Retorno - Rafael Oliveira', type: 'RECEITA', amount: 200, paymentMethod: 'SALDO_MP', date: today, status: 'PENDENTE', createdAt: new Date().toISOString() },
       { id: 'f3', desc: 'Aluguel Consultorio', type: 'DESPESA', amount: 180, date: today, status: 'PAGO', createdAt: new Date().toISOString() }
     ]);
 
     save('agenda', [
-      { id: 'a1', patientId: 'p1', patientName: 'Ana Beatriz Souza', phone: '21999990001', date: today, time: '14:00', type: 'Retorno / Reavaliacao', status: 'CONFIRMADO', checkoutMode: 'Pagar na Clinica', amount: 220, notes: 'Trazer exames de sangue', createdAt: new Date().toISOString() }
+      {
+        id: 'a1',
+        patientId: 'p1',
+        patientName: 'Ana Beatriz Souza',
+        phone: '21999990001',
+        date: today,
+        time: '14:00',
+        modality: 'RETORNO',
+        modalityLabel: 'Retorno',
+        type: 'Retorno',
+        status: 'CONFIRMADO',
+        checkoutMode: 'Pagar na Clinica',
+        amount: 200,
+        notes: 'Trazer exames de sangue',
+        createdAt: new Date().toISOString()
+      }
     ]);
 
     save('busySlots', [

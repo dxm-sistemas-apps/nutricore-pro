@@ -16,9 +16,6 @@ const DEFAULT_MP_TOKEN = (process.env.MP_ACCESS_TOKEN || '').trim();
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
 
-// =========================================================================
-// FIREBASE ADMIN (OPCIONAL: BAIXA AUTOMATICA NO FIRESTORE VIA WEBHOOK)
-// =========================================================================
 let firestore = null;
 if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   try {
@@ -34,10 +31,8 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   console.log('[INFO] Rodando sem Firebase Admin (baixa automatica via polling no app continua ativa).');
 }
 
-// Cache em memoria para correlacionar Order ID -> { clinicId, appointmentId, financeId }
 const orderMetaCache = new Map();
 
-// Resolve Access Token da clinica (Multi-Tenant) ou padrao do .env
 async function getClinicMpToken(clinicId) {
   if (firestore && clinicId) {
     try {
@@ -52,7 +47,6 @@ async function getClinicMpToken(clinicId) {
   return DEFAULT_MP_TOKEN;
 }
 
-// Sanitiza strings para o padrao aceito pela API de Orders (apenas letras, numeros, _ e -)
 function cleanId(str) {
   return String(str || '').replace(/[^a-zA-Z0-9_-]/g, '');
 }
@@ -66,7 +60,6 @@ function cleanText(str) {
     .trim();
 }
 
-// Empacota e desempacota external_reference (sem caractere "|", maximo 64 chars)
 function encodeRef({ clinicId, appointmentId, financeId }) {
   const c = cleanId(clinicId);
   const a = cleanId(appointmentId);
@@ -90,7 +83,6 @@ function decodeRef(ref, orderId) {
   return null;
 }
 
-// Formata erro detalhado da API de Orders para facilitar diagnostico
 function formatMpError(data, fallback) {
   const errObj = data?.errors?.[0];
   if (errObj) {
@@ -100,7 +92,6 @@ function formatMpError(data, fallback) {
   return data?.message || fallback;
 }
 
-// Atualiza Agenda e Financeiro no Firestore quando o pagamento for aprovado
 async function settleOrderInFirestore(meta, externalId) {
   if (!firestore || !meta || !meta.clinicId) return;
   const { clinicId, appointmentId, financeId } = meta;
@@ -124,9 +115,6 @@ async function settleOrderInFirestore(meta, externalId) {
   }
 }
 
-// =========================================================================
-// 1. HEALTH CHECK
-// =========================================================================
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
@@ -137,18 +125,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// =========================================================================
-// 2. GERAR PIX DINAMICO VIA API DE ORDERS (POST /v1/orders)
-// =========================================================================
 app.post('/api/payments/pix', async (req, res) => {
   try {
     const { clinicId, appointmentId, financeId, amount, description, payerEmail } = req.body;
     const token = await getClinicMpToken(clinicId);
 
     if (!token || token.includes('COLE_SEU')) {
-      return res.status(400).json({
-        error: 'MP_ACCESS_TOKEN nao configurado no arquivo backend/.env'
-      });
+      return res.status(400).json({ error: 'MP_ACCESS_TOKEN nao configurado no arquivo backend/.env' });
     }
 
     const amountStr = Number(amount).toFixed(2);
@@ -162,17 +145,12 @@ app.post('/api/payments/pix', async (req, res) => {
       external_reference: externalRef,
       processing_mode: 'automatic',
       description: cleanText(description || 'Consulta Nutricional').slice(0, 100),
-      payer: {
-        email: (payerEmail || 'paciente@nutricore.com').trim()
-      },
+      payer: { email: (payerEmail || 'paciente@nutricore.com').trim() },
       transactions: {
         payments: [
           {
             amount: amountStr,
-            payment_method: {
-              id: 'pix',
-              type: 'bank_transfer'
-            }
+            payment_method: { id: 'pix', type: 'bank_transfer' }
           }
         ]
       }
@@ -191,8 +169,7 @@ app.post('/api/payments/pix', async (req, res) => {
     const data = await mpRes.json();
     if (!mpRes.ok) {
       console.error('[MP ORDERS PIX ERRO]', JSON.stringify(data, null, 2));
-      const msg = formatMpError(data, 'Erro ao criar Order PIX no Mercado Pago');
-      return res.status(mpRes.status).json({ error: msg, details: data });
+      return res.status(mpRes.status).json({ error: formatMpError(data, 'Erro ao criar Order PIX no Mercado Pago'), details: data });
     }
 
     const firstPayment = data.transactions?.payments?.[0] || {};
@@ -202,7 +179,6 @@ app.post('/api/payments/pix', async (req, res) => {
     const ticketUrl = pm.ticket_url || '';
 
     orderMetaCache.set(String(data.id), meta);
-
     const isPaid = data.status === 'processed' || firstPayment.status === 'processed' || firstPayment.status === 'approved';
 
     res.json({
@@ -218,26 +194,13 @@ app.post('/api/payments/pix', async (req, res) => {
   }
 });
 
-// =========================================================================
-// 3. GERAR CHECKOUT PRO (SALDO MERCADO PAGO / CARTAO DE CREDITO / DEBITO)
-// =========================================================================
 app.post('/api/payments/checkout', async (req, res) => {
   try {
-    const {
-      clinicId,
-      appointmentId,
-      financeId,
-      amount,
-      description,
-      payerEmail,
-      paymentMethod
-    } = req.body;
+    const { clinicId, appointmentId, financeId, amount, description, payerEmail, paymentMethod } = req.body;
     const token = await getClinicMpToken(clinicId);
 
     if (!token || token.includes('COLE_SEU')) {
-      return res.status(400).json({
-        error: 'MP_ACCESS_TOKEN nao configurado no arquivo backend/.env'
-      });
+      return res.status(400).json({ error: 'MP_ACCESS_TOKEN nao configurado no arquivo backend/.env' });
     }
 
     const meta = { clinicId, appointmentId, financeId };
@@ -256,16 +219,13 @@ app.post('/api/payments/checkout', async (req, res) => {
       payer: { email: (payerEmail || 'paciente@nutricore.com').trim() },
       external_reference: externalRef,
       payment_methods: {
-        // Mantem saldo em conta (account_money) disponivel no Checkout Pro
-        excluded_payment_types: isMpBalance
-          ? [{ id: 'ticket' }]
-          : [{ id: 'ticket' }, { id: 'bank_transfer' }],
+        excluded_payment_types: isMpBalance ? [{ id: 'ticket' }] : [{ id: 'ticket' }, { id: 'bank_transfer' }],
         installments: isMpBalance ? 1 : 6
       },
       back_urls: {
-        success: `${FRONTEND_URL}/?mp_status=approved&ag=${encodeURIComponent(appointmentId || '')}`,
-        pending: `${FRONTEND_URL}/?mp_status=pending&ag=${encodeURIComponent(appointmentId || '')}`,
-        failure: `${FRONTEND_URL}/?mp_status=failure&ag=${encodeURIComponent(appointmentId || '')}`
+        success: `${FRONTEND_URL}/paciente.html?mp_status=approved&ag=${encodeURIComponent(appointmentId || '')}`,
+        pending: `${FRONTEND_URL}/paciente.html?mp_status=pending&ag=${encodeURIComponent(appointmentId || '')}`,
+        failure: `${FRONTEND_URL}/paciente.html?mp_status=failure&ag=${encodeURIComponent(appointmentId || '')}`
       }
     };
 
@@ -287,10 +247,7 @@ app.post('/api/payments/checkout', async (req, res) => {
 
     const data = await mpRes.json();
     if (!mpRes.ok) {
-      return res.status(mpRes.status).json({
-        error: formatMpError(data, 'Erro ao criar Checkout Pro'),
-        details: data
-      });
+      return res.status(mpRes.status).json({ error: formatMpError(data, 'Erro ao criar Checkout Pro'), details: data });
     }
 
     res.json({
@@ -305,9 +262,6 @@ app.post('/api/payments/checkout', async (req, res) => {
   }
 });
 
-// =========================================================================
-// 4. CONSULTAR STATUS DA ORDER (GET /v1/orders/:id)
-// =========================================================================
 app.get('/api/payments/status/:orderId', async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -341,12 +295,8 @@ app.get('/api/payments/status/:orderId', async (req, res) => {
   }
 });
 
-// =========================================================================
-// 5. WEBHOOK OFICIAL (SUPORTA ORDERS API E PAYMENTS API)
-// =========================================================================
 app.post('/api/payments/webhook', async (req, res) => {
   res.sendStatus(200);
-
   try {
     const topic = req.body?.type || req.query?.topic || req.body?.topic || '';
     const resourceId = req.body?.data?.id || req.query?.['data.id'] || req.query?.id;
@@ -366,7 +316,6 @@ app.post('/api/payments/webhook', async (req, res) => {
 
       if (mpRes.ok && isPaid) {
         const meta = decodeRef(order.external_reference, order.id);
-        console.log(`[WEBHOOK ORDER] Order ${resourceId} PAGA! Clinica: ${meta?.clinicId}`);
         await settleOrderInFirestore(meta, order.id);
       }
       return;
@@ -379,7 +328,6 @@ app.post('/api/payments/webhook', async (req, res) => {
       const payment = await mpRes.json();
       if (mpRes.ok && payment.status === 'approved') {
         const meta = decodeRef(payment.external_reference, payment.id);
-        console.log(`[WEBHOOK PAYMENT] Pagamento ${resourceId} APROVADO! Clinica: ${meta?.clinicId}`);
         await settleOrderInFirestore(meta, payment.id);
       }
     }
@@ -389,8 +337,5 @@ app.post('/api/payments/webhook', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`=========================================================`);
-  console.log(` NutriCore Pro - Backend Mercado Pago (API DE ORDERS)`);
-  console.log(` Rodando na porta ${PORT} -> http://localhost:${PORT}/api/health`);
-  console.log(`=========================================================`);
+  console.log(`NutriCore Pro - Backend Mercado Pago rodando na porta ${PORT}`);
 });

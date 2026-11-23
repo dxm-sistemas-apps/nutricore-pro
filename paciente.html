@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#059669" />
+  <title>NutriCore Paciente — Portal de Acompanhamento</title>
+  <link rel="manifest" href="./manifest-paciente.json" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    :root { --brand: #059669; }
+    .bg-brand { background-color: var(--brand); }
+    .text-brand { color: var(--brand); }
+    .border-brand { border-color: var(--brand); }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white !important; }
+      #print-area { display: block !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased selection:bg-emerald-100">
+
+  <!-- TELA EXCLUSIVA DE LOGIN / AUTOCADASTRO DO PACIENTE -->
+  <div id="auth-screen" class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-950">
+    <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-7">
+      <div class="flex items-center gap-3 mb-5">
+        <div class="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-lg">
+          <i data-lucide="heart-pulse" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <h1 class="text-2xl font-bold text-slate-900">NutriCore Paciente</h1>
+          <p id="auth-mode-badge" class="text-xs text-slate-500">Portal Exclusivo de Acompanhamento</p>
+        </div>
+      </div>
+
+      <form id="patient-login-form" class="space-y-4">
+        <div>
+          <label class="text-xs font-semibold text-slate-600 uppercase">Seu E-mail</label>
+          <input type="email" id="pat-login-email" required placeholder="seuemail@exemplo.com"
+            class="w-full mt-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none" />
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600 uppercase">Sua Senha</label>
+          <input type="password" id="pat-login-pass" required placeholder="••••••"
+            class="w-full mt-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none" />
+        </div>
+        <button type="submit"
+          class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-md transition">
+          Entrar no Meu Acompanhamento
+        </button>
+      </form>
+
+      <div id="demo-pat-box" class="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600">
+        <p class="font-semibold text-slate-700">Conta Demo Local:</p>
+        <p>• <b>ana@paciente.com</b> / senha: <b>123</b></p>
+      </div>
+
+      <button id="toggle-pat-register" type="button" class="w-full mt-4 text-sm text-emerald-700 font-semibold hover:underline">
+        Primeiro acesso? Criar minha conta de paciente
+      </button>
+
+      <!-- AUTOCADASTRO DO PACIENTE -->
+      <form id="patient-register-form" class="hidden space-y-3 mt-4 pt-4 border-t">
+        <div>
+          <label class="text-[11px] font-bold text-slate-500 uppercase">Codigo da Clinica / Nutricionista</label>
+          <input id="reg-pat-clinic" placeholder="Ex: clinic_1732150000" required class="w-full mt-1 px-3 py-2 rounded-lg border text-sm" />
+        </div>
+        <input id="reg-pat-name" placeholder="Seu Nome Completo" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-phone" placeholder="Seu WhatsApp (ex: 21999998888)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-email" type="email" placeholder="Seu E-mail" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <input id="reg-pat-pass" type="password" placeholder="Crie sua Senha (min. 6 caracteres)" required class="w-full px-3 py-2 rounded-lg border text-sm" />
+        <p class="text-[11px] text-slate-500">
+          Seu login sera criado agora e enviado automaticamente para a clinica aprovar seu acesso.
+        </p>
+        <button type="submit" class="w-full py-2.5 rounded-xl bg-slate-900 text-white font-semibold text-sm">
+          Cadastrar e Solicitar Liberacao
+        </button>
+      </form>
+
+      <div class="mt-5 pt-3 border-t text-center">
+        <a href="./index.html" class="text-xs text-slate-400 hover:text-slate-600">
+          Sou Nutricionista / Clinica → Acessar App Profissional
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- SHELL DO PORTAL DO PACIENTE -->
+  <div id="app-shell" class="hidden min-h-screen flex flex-col md:flex-row no-print"></div>
+
+  <!-- AREA DE IMPRESSAO / PDF -->
+  <div id="print-area" class="hidden p-8 max-w-4xl mx-auto text-slate-900"></div>
+
+  <script type="module" src="./js/patient-app.js"></script>
+</body>
+</html>

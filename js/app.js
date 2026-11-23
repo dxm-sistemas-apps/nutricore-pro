@@ -1,10 +1,14 @@
 import { mountPatientPortal } from './patient-portal.js';
 import { ClinicDB } from './db.js';
 import { TACO_DB, calcMacros, getSubstitutes } from './taco.js';
+import { renderCalendarGrid, formatModalityBadge } from './calendar-ui.js';
 
 let activeTab = 'prontuario';
 let selectedPatientId = null;
-let selectedAuthRole = 'PROFISSIONAL'; // 'PROFISSIONAL' | 'PACIENTE'
+let agendaSelectedDate = new Date().toISOString().slice(0, 10);
+let agendaCalYear = new Date().getFullYear();
+let agendaCalMonth = new Date().getMonth();
+
 let formulaItems = [{ ativo: 'Magnesio Dimalato', dose: '300 mg' }];
 let draftMeals = [
   { name: 'Cafe da Manha', time: '07:30', items: [{ foodId: 't23', grams: 100 }, { foodId: 't9', grams: 50 }, { foodId: 't36', grams: 150 }] },
@@ -13,10 +17,11 @@ let draftMeals = [
   { name: 'Jantar', time: '20:00', items: [{ foodId: 't3', grams: 120 }, { foodId: 't20', grams: 140 }, { foodId: 't49', grams: 50 }] }
 ];
 
-// Registra Service Worker (Offline + Auto-Update)
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js').then((reg) => {
+      reg.update().catch(() => {});
+    }).catch(() => {});
   });
 }
 
@@ -35,57 +40,14 @@ function updateNetworkBadge() {
 window.addEventListener('online', updateNetworkBadge);
 window.addEventListener('offline', updateNetworkBadge);
 
-// Seletor de Perfil na tela de Login / Cadastro
-function setAuthRole(role) {
-  selectedAuthRole = role;
-  const isPatient = role === 'PACIENTE';
-
-  document.querySelectorAll('.auth-role-btn').forEach((btn) => {
-    const active = btn.dataset.authRole === role;
-    btn.className = active
-      ? 'auth-role-btn py-2 px-3 rounded-lg text-xs font-bold bg-emerald-600 text-white shadow transition'
-      : 'auth-role-btn py-2 px-3 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition';
-  });
-
-  const emailLabel = document.getElementById('login-email-label');
-  const loginEmail = document.getElementById('login-email');
-  const submitBtn = document.getElementById('login-submit-btn');
-  const toggleReg = document.getElementById('toggle-register');
-  const regPro = document.getElementById('register-form');
-  const regPat = document.getElementById('register-patient-form');
-
-  if (emailLabel) emailLabel.textContent = isPatient ? 'E-mail do Paciente' : 'E-mail Profissional';
-  if (loginEmail && !ClinicDB.isCloudMode) {
-    loginEmail.value = isPatient ? 'ana@paciente.com' : 'clara@nutri.com';
-  }
-  if (submitBtn) submitBtn.textContent = isPatient ? 'Entrar no Portal do Paciente' : 'Entrar no Consultorio';
-  if (toggleReg) {
-    toggleReg.textContent = isPatient
-      ? 'Criar minha conta de paciente (autocadastro)'
-      : 'Cadastrar novo profissional / clinica isolada';
-  }
-
-  // Se algum formulario de cadastro estiver aberto, alterna para o perfil escolhido
-  if ((regPro && !regPro.classList.contains('hidden')) || (regPat && !regPat.classList.contains('hidden'))) {
-    regPro?.classList.toggle('hidden', isPatient);
-    regPat?.classList.toggle('hidden', !isPatient);
-  }
-}
-
-// Inicializacao
 async function bootstrap() {
   const badge = document.getElementById('auth-mode-badge');
   if (ClinicDB.isCloudMode) {
-    badge.textContent = 'Firebase Auth + Firestore Offline-First';
+    badge.textContent = 'App Profissional & Clinica • Firebase Cloud';
     document.getElementById('demo-accounts-box').classList.add('hidden');
   } else {
-    badge.textContent = 'Modo Local Offline • Pronto para Firebase';
+    badge.textContent = 'App Profissional & Clinica • Modo Local';
   }
-
-  document.querySelectorAll('.auth-role-btn').forEach((btn) => {
-    btn.addEventListener('click', () => setAuthRole(btn.dataset.authRole));
-  });
-  setAuthRole('PROFISSIONAL');
 
   const session = await ClinicDB.init();
   if (session) {
@@ -101,26 +63,19 @@ function applyBranding(user) {
   document.documentElement.style.setProperty('--brand', user.primaryColor || '#059669');
   document.getElementById('nav-clinic-name').textContent = user.clinicName;
   document.getElementById('nav-prof-name').textContent = `${user.name} • ${user.crn}`;
+  const cidEl = document.getElementById('nav-clinic-id');
+  if (cidEl) cidEl.textContent = `Codigo: ${user.clinicId}`;
   document.getElementById('mob-clinic-name').textContent = user.clinicName;
   document.getElementById('mob-prof-name').textContent = `${user.name} • ${user.crn}`;
 }
 
 async function enterApp(user) {
-  // Bloqueio caso o paciente tenha criado conta e ainda aguarde aceite do profissional
-  if (user.role === 'PACIENTE' && user.approvalStatus === 'PENDING') {
-    alert('Seu cadastro foi criado e esta aguardando o aceite do profissional/clinica para liberar o acesso.');
-    await ClinicDB.logout();
-    location.reload();
+  if (user.role === 'PACIENTE') {
+    location.href = './paciente.html';
     return;
   }
-
   document.getElementById('auth-screen').classList.add('hidden');
   document.getElementById('app-shell').classList.remove('hidden');
-  if (user.role === 'PACIENTE') {
-    mountPatientPortal({ printDocument, buildGoogleCalendarUrl, downloadICS, renderWeightChart });
-    lucide.createIcons();
-    return;
-  }
   applyBranding(user);
   updateNetworkBadge();
   const patients = await ClinicDB.getAll('patients');
@@ -128,14 +83,13 @@ async function enterApp(user) {
   renderTab(activeTab);
 }
 
-// Auth listeners
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
     const user = await ClinicDB.login(
       document.getElementById('login-email').value.trim(),
       document.getElementById('login-pass').value,
-      selectedAuthRole
+      'NUTRICIONISTA'
     );
     enterApp(user);
   } catch (err) {
@@ -144,13 +98,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 });
 
 document.getElementById('toggle-register').addEventListener('click', () => {
-  if (selectedAuthRole === 'PACIENTE') {
-    document.getElementById('register-form').classList.add('hidden');
-    document.getElementById('register-patient-form').classList.toggle('hidden');
-  } else {
-    document.getElementById('register-patient-form').classList.add('hidden');
-    document.getElementById('register-form').classList.toggle('hidden');
-  }
+  document.getElementById('register-form').classList.toggle('hidden');
 });
 
 document.getElementById('register-form').addEventListener('submit', async (e) => {
@@ -171,34 +119,12 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
   }
 });
 
-// Autocadastro do Paciente (cria login/senha no Firebase e envia solicitacao para aceite)
-document.getElementById('register-patient-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  try {
-    if (typeof ClinicDB.registerPatientSelf === 'function') {
-      await ClinicDB.registerPatientSelf({
-        clinicIdentifier: document.getElementById('reg-pat-clinic').value.trim(),
-        name: document.getElementById('reg-pat-name').value.trim(),
-        phone: document.getElementById('reg-pat-phone').value.trim(),
-        email: document.getElementById('reg-pat-email').value.trim(),
-        password: document.getElementById('reg-pat-pass').value
-      });
-    } else {
-      await ClinicDB.registerPatientPortalAccess({
-        patientName: document.getElementById('reg-pat-name').value.trim(),
-        phone: document.getElementById('reg-pat-phone').value.trim(),
-        email: document.getElementById('reg-pat-email').value.trim(),
-        password: document.getElementById('reg-pat-pass').value,
-        clinicIdentifier: document.getElementById('reg-pat-clinic').value.trim(),
-        approvalStatus: 'PENDING'
-      });
-    }
-    alert('Conta criada com sucesso! Aguarde o aceite do profissional para entrar no Portal do Paciente.');
-    document.getElementById('register-patient-form').reset();
-    document.getElementById('register-patient-form').classList.add('hidden');
-  } catch (err) {
-    alert(err.message);
-  }
+['btn-copy-clinic-id', 'btn-copy-clinic-id-mob'].forEach(id => {
+  document.getElementById(id)?.addEventListener('click', () => {
+    const cid = ClinicDB.currentSession?.clinicId || '';
+    navigator.clipboard?.writeText(cid);
+    alert(`Codigo da clinica copiado: ${cid}\nEnvie este codigo para o paciente criar o cadastro no App do Paciente.`);
+  });
 });
 
 ['btn-logout', 'btn-logout-mob'].forEach(id => {
@@ -208,10 +134,11 @@ document.getElementById('register-patient-form').addEventListener('submit', asyn
   });
 });
 
-// Modal White-Label
 ['btn-whitelabel', 'btn-whitelabel-mob'].forEach(id => {
   document.getElementById(id).addEventListener('click', () => {
     const u = ClinicDB.currentSession;
+    const cidInput = document.getElementById('wl-clinic-id');
+    if (cidInput) cidInput.value = u.clinicId || '';
     document.getElementById('wl-clinic').value = u.clinicName || '';
     document.getElementById('wl-name').value = u.name || '';
     document.getElementById('wl-crn').value = u.crn || '';
@@ -234,7 +161,6 @@ document.getElementById('wl-form').addEventListener('submit', async (e) => {
   document.getElementById('wl-modal').classList.add('hidden');
 });
 
-// Navegacao
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     activeTab = btn.dataset.tab;
@@ -264,7 +190,7 @@ async function renderTab(tab) {
 }
 
 // =========================================================================
-// MODULO 1: PRONTUARIO + ANTROPOMETRIA + GRAFICO DE EVOLUCAO + ACEITE PACIENTE
+// MODULO 1: PRONTUARIO + ANTROPOMETRIA + GRAFICO + ACEITE DE PACIENTES
 // =========================================================================
 async function renderProntuario() {
   const patients = await ClinicDB.getAll('patients');
@@ -278,7 +204,6 @@ async function renderProntuario() {
   const evals = patient ? allEvals.filter(e => e.patientId === patient.id).sort((a, b) => a.date.localeCompare(b.date)) : [];
   const lastEval = evals[evals.length - 1];
 
-  // Calculos clinicos (IMC, RCQ, TMB Mifflin-St Jeor, GET)
   let imc = '-', imcClass = '', tmb = '-', get = '-', rcq = '-';
   if (patient && lastEval) {
     const hM = (lastEval.height || patient.height || 170) / 100;
@@ -302,14 +227,13 @@ async function renderProntuario() {
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-2xl font-bold text-slate-900">Prontuario & Antropometria</h1>
-          <p class="text-sm text-slate-500">Cadastro clinico, anamnese, gasto energetico (Mifflin-St Jeor) e evolucao</p>
+          <p class="text-sm text-slate-500">Codigo da clinica para cadastro de pacientes: <b class="font-mono text-emerald-700">${ClinicDB.currentSession.clinicId}</b></p>
         </div>
         <button id="toggle-new-patient" class="bg-brand text-white px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm hover:opacity-90">
           + Novo Paciente
         </button>
       </div>
 
-      <!-- SOLICITACOES DE ACESSO CRIADAS PELOS PROPRIOS PACIENTES -->
       ${pendingRequests.length > 0 ? `
         <div class="bg-amber-50 border border-amber-300 rounded-2xl p-4 space-y-3">
           <div class="flex items-center justify-between">
@@ -337,7 +261,6 @@ async function renderProntuario() {
         </div>
       ` : ''}
 
-      <!-- FORMULARIO NOVO PACIENTE -->
       <form id="new-patient-form" class="hidden bg-white p-5 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-4 gap-3">
         <input id="np-name" placeholder="Nome completo" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
         <input id="np-phone" placeholder="WhatsApp (ex: 21999990000)" class="px-3 py-2 rounded-xl border text-sm" />
@@ -353,7 +276,6 @@ async function renderProntuario() {
         <button type="submit" class="bg-slate-900 text-white rounded-xl font-semibold text-sm py-2">Salvar Paciente</button>
       </form>
 
-      <!-- SELETOR DE PACIENTE -->
       <div class="flex gap-2 overflow-x-auto pb-1">
         ${patients.map(p => `
           <button data-select-p="${p.id}" class="px-4 py-2 rounded-xl text-sm border shrink-0 transition ${p.id === patient?.id ? 'bg-brand text-white border-transparent font-semibold shadow' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'}">
@@ -363,7 +285,6 @@ async function renderProntuario() {
       </div>
 
       ${!patient ? '<div class="bg-white p-8 rounded-2xl border text-center text-slate-500">Cadastre seu primeiro paciente acima ou aceite um cadastro pendente para iniciar o prontuario.</div>' : `
-        <!-- KPIs CLINICOS -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
             <p class="text-xs font-semibold text-slate-500 uppercase">Peso / IMC</p>
@@ -388,7 +309,6 @@ async function renderProntuario() {
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <!-- ANAMNESE EDITAVEL -->
           <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
             <div class="flex items-center justify-between">
               <h2 class="font-bold text-slate-800">Anamnese & Alergias</h2>
@@ -404,7 +324,6 @@ async function renderProntuario() {
             </div>
           </div>
 
-          <!-- NOVA AVALIACAO ANTROPOMETRICA -->
           <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
             <h2 class="font-bold text-slate-800">Registrar Nova Avaliacao Fisica</h2>
             <form id="eval-form" class="grid grid-cols-2 md:grid-cols-3 gap-2.5">
@@ -424,7 +343,6 @@ async function renderProntuario() {
               </button>
             </form>
 
-            <!-- GRAFICO DE EVOLUCAO SVG NATIVO (OFFLINE) -->
             <div class="pt-2 border-t">
               <p class="text-xs font-semibold text-slate-500 uppercase mb-2">Evolucao de Peso (kg)</p>
               ${renderWeightChart(evals)}
@@ -441,25 +359,15 @@ async function renderProntuario() {
 
   document.querySelectorAll('[data-approve-pat]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const uid = btn.dataset.approvePat;
-      if (typeof ClinicDB.approvePatientRequest === 'function') {
-        await ClinicDB.approvePatientRequest(uid, 'APPROVED');
-      } else {
-        await ClinicDB.update('patients', uid, { approvalStatus: 'APPROVED' });
-      }
-      alert('Paciente aceito! O acesso ao Portal do Paciente foi liberado.');
+      await ClinicDB.approvePatientRequest(btn.dataset.approvePat, 'APPROVED');
+      alert('Paciente aceito! O acesso ao App do Paciente foi liberado.');
       renderProntuario();
     });
   });
 
   document.querySelectorAll('[data-reject-pat]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const uid = btn.dataset.rejectPat;
-      if (typeof ClinicDB.approvePatientRequest === 'function') {
-        await ClinicDB.approvePatientRequest(uid, 'REJECTED');
-      } else {
-        await ClinicDB.remove('patients', uid);
-      }
+      await ClinicDB.approvePatientRequest(btn.dataset.rejectPat, 'REJECTED');
       renderProntuario();
     });
   });
@@ -898,13 +806,14 @@ function printRx(rx) {
 }
 
 // =========================================================================
-// MODULO 4: FINANCEIRO COMPLETO + VALORES DOS PLANOS + SALDO MERCADO PAGO
+// MODULO 4: FINANCEIRO COMPLETO + TABELA DE VALORES (1a VEZ, RETORNO, TRI, SEMESTRAL)
 // =========================================================================
 async function renderFinanceiro() {
   const list = await ClinicDB.getAll('finance');
   const cfg = await ClinicDB.getScheduleConfig();
   const pricing = {
-    consulta: Number(cfg.priceConsulta ?? 250),
+    primeira: Number(cfg.priceConsultaPrimeira ?? cfg.priceConsulta ?? 300),
+    retorno: Number(cfg.priceConsultaRetorno ?? 200),
     planoTri: Number(cfg.pricePlanoTri ?? 650),
     planoSemestral: Number(cfg.pricePlanoSemestral ?? 1150)
   };
@@ -918,20 +827,23 @@ async function renderFinanceiro() {
   document.getElementById('main-view').innerHTML = `
     <div class="space-y-6">
       <div>
-        <h1 class="text-2xl font-bold text-slate-900">Financeiro Completo & Tabela de Planos</h1>
-        <p class="text-sm text-slate-500">Valores de consulta/planos sincronizados com o Portal do Paciente, fluxo de caixa e recibos</p>
+        <h1 class="text-2xl font-bold text-slate-900">Financeiro Completo & Tabela de Valores</h1>
+        <p class="text-sm text-slate-500">Defina os valores de Consulta 1a Vez, Retorno, Plano Tri e Plano Semestral para carregar na Agenda e no App do Paciente</p>
       </div>
 
-      <!-- TABELA DE VALORES CONFIGURAVEL PELO PROFISSIONAL -->
       <form id="pricing-form" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-        <div class="flex items-center justify-between">
-          <h2 class="font-bold text-slate-800 text-sm uppercase">Tabela de Valores (Carrega no App e Portal do Paciente)</h2>
-          <span class="text-xs text-emerald-600 font-semibold">Sincronizacao Automatica</span>
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h2 class="font-bold text-slate-800 text-sm uppercase">Tabela de Valores Vigentes (Sincroniza com Agenda e Paciente)</h2>
+          <span class="text-xs text-emerald-600 font-semibold">Atualizacao Automatica</span>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div>
-            <label class="text-[11px] font-bold text-slate-500 uppercase">Consulta Avulsa (R$)</label>
-            <input id="pr-consulta" type="number" step="0.01" value="${pricing.consulta}" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm font-semibold" />
+            <label class="text-[11px] font-bold text-slate-500 uppercase">Consulta 1a Vez (R$)</label>
+            <input id="pr-primeira" type="number" step="0.01" value="${pricing.primeira}" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm font-semibold" />
+          </div>
+          <div>
+            <label class="text-[11px] font-bold text-slate-500 uppercase">Retorno (R$)</label>
+            <input id="pr-retorno" type="number" step="0.01" value="${pricing.retorno}" required class="w-full mt-1 px-3 py-2 rounded-xl border text-sm font-semibold" />
           </div>
           <div>
             <label class="text-[11px] font-bold text-slate-500 uppercase">Plano Trimestral (R$)</label>
@@ -966,20 +878,20 @@ async function renderFinanceiro() {
         </div>
       </div>
 
-      <!-- LANCAMENTO FINANCEIRO COM SELECAO DE PLANO E SALDO MERCADO PAGO -->
       <form id="fin-form" class="bg-white p-5 rounded-2xl border shadow-sm grid grid-cols-1 md:grid-cols-7 gap-3">
         <select id="fin-plan-preset" class="px-3 py-2 rounded-xl border text-sm bg-slate-50">
-          <option value="consulta">Consulta (${fmt(pricing.consulta)})</option>
-          <option value="planoTri">Plano Tri (${fmt(pricing.planoTri)})</option>
-          <option value="planoSemestral">Plano Semestral (${fmt(pricing.planoSemestral)})</option>
-          <option value="custom">Outro / Personalizado</option>
+          <option value="PRIMEIRA_VEZ">Consulta 1a Vez (${fmt(pricing.primeira)})</option>
+          <option value="RETORNO">Retorno (${fmt(pricing.retorno)})</option>
+          <option value="PLANO_TRI">Plano Tri (${fmt(pricing.planoTri)})</option>
+          <option value="PLANO_SEMESTRAL">Plano Semestral (${fmt(pricing.planoSemestral)})</option>
+          <option value="CUSTOM">Outro / Personalizado</option>
         </select>
-        <input id="fin-desc" value="Consulta Nutricional" placeholder="Descricao" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
+        <input id="fin-desc" value="Consulta 1a Vez" placeholder="Descricao" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
         <select id="fin-type" class="px-3 py-2 rounded-xl border text-sm">
           <option value="RECEITA">Receita (+)</option>
           <option value="DESPESA">Despesa (-)</option>
         </select>
-        <input id="fin-amount" type="number" step="0.01" value="${pricing.consulta}" placeholder="Valor R$" required class="px-3 py-2 rounded-xl border text-sm" />
+        <input id="fin-amount" type="number" step="0.01" value="${pricing.primeira}" placeholder="Valor R$" required class="px-3 py-2 rounded-xl border text-sm" />
         <select id="fin-method" class="px-3 py-2 rounded-xl border text-sm">
           <option value="PIX">PIX</option>
           <option value="CARTAO">Cartao</option>
@@ -1035,13 +947,20 @@ async function renderFinanceiro() {
 
   document.getElementById('pricing-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const p1 = parseFloat(document.getElementById('pr-primeira').value) || 0;
+    const ret = parseFloat(document.getElementById('pr-retorno').value) || 0;
+    const tri = parseFloat(document.getElementById('pr-tri').value) || 0;
+    const sem = parseFloat(document.getElementById('pr-semestral').value) || 0;
+
     await ClinicDB.saveScheduleConfig({
       ...cfg,
-      priceConsulta: parseFloat(document.getElementById('pr-consulta').value) || 0,
-      pricePlanoTri: parseFloat(document.getElementById('pr-tri').value) || 0,
-      pricePlanoSemestral: parseFloat(document.getElementById('pr-semestral').value) || 0
+      priceConsulta: p1,
+      priceConsultaPrimeira: p1,
+      priceConsultaRetorno: ret,
+      pricePlanoTri: tri,
+      pricePlanoSemestral: sem
     });
-    alert('Valores da Consulta, Plano Trimestral e Plano Semestral salvos e sincronizados!');
+    alert('Valores de Consulta 1a Vez, Retorno, Plano Tri e Plano Semestral salvos e sincronizados!');
     renderFinanceiro();
   });
 
@@ -1049,13 +968,16 @@ async function renderFinanceiro() {
     const val = e.target.value;
     const descEl = document.getElementById('fin-desc');
     const amountEl = document.getElementById('fin-amount');
-    if (val === 'consulta') {
-      descEl.value = 'Consulta Nutricional';
-      amountEl.value = pricing.consulta;
-    } else if (val === 'planoTri') {
+    if (val === 'PRIMEIRA_VEZ') {
+      descEl.value = 'Consulta 1a Vez';
+      amountEl.value = pricing.primeira;
+    } else if (val === 'RETORNO') {
+      descEl.value = 'Retorno';
+      amountEl.value = pricing.retorno;
+    } else if (val === 'PLANO_TRI') {
       descEl.value = 'Plano Trimestral';
       amountEl.value = pricing.planoTri;
-    } else if (val === 'planoSemestral') {
+    } else if (val === 'PLANO_SEMESTRAL') {
       descEl.value = 'Plano Semestral';
       amountEl.value = pricing.planoSemestral;
     }
@@ -1110,22 +1032,29 @@ async function renderFinanceiro() {
 }
 
 // =========================================================================
-// MODULO 5: AGENDA + GOOGLE CALENDAR + .ICS + REMARCAR / EXCLUIR CONSULTAS
+// MODULO 5: AGENDA + CALENDARIO MENSAL + MODALIDADE (1a VEZ / RETORNO / TRI / SEMESTRAL)
 // =========================================================================
 async function renderAgenda() {
   const events = await ClinicDB.getAll('agenda');
+  const busySlots = await ClinicDB.getAll('busySlots');
   const cfg = await ClinicDB.getScheduleConfig();
   const fmt = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  const priceConsulta = Number(cfg.priceConsulta ?? 250);
+
+  const pricePrimeira = Number(cfg.priceConsultaPrimeira ?? cfg.priceConsulta ?? 300);
+  const priceRetorno = Number(cfg.priceConsultaRetorno ?? 200);
   const priceTri = Number(cfg.pricePlanoTri ?? 650);
   const priceSem = Number(cfg.pricePlanoSemestral ?? 1150);
+
+  const dayEvents = events
+    .filter(ev => ev.date === agendaSelectedDate)
+    .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
 
   document.getElementById('main-view').innerHTML = `
     <div class="space-y-6">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 class="text-2xl font-bold text-slate-900">Agenda & Autoagendamento</h1>
-          <p class="text-sm text-slate-500">Gerencie consultas, aprove solicitacoes do Portal do Cliente, remarque ou exclua agendamentos</p>
+          <h1 class="text-2xl font-bold text-slate-900">Agenda & Calendario</h1>
+          <p class="text-sm text-slate-500">Visualize no calendario os horarios ocupados (1a vez, retorno, plano tri ou semestral) e dias livres</p>
         </div>
         <button id="toggle-sched-cfg" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold">Configurar Horarios & PIX</button>
       </div>
@@ -1141,14 +1070,25 @@ async function renderAgenda() {
         <button type="submit" class="col-span-2 md:col-span-1 self-end bg-brand text-white py-2 rounded-xl text-xs font-bold">Salvar Grade</button>
       </form>
 
+      ${renderCalendarGrid({
+        year: agendaCalYear,
+        month: agendaCalMonth,
+        selectedDate: agendaSelectedDate,
+        events,
+        busySlots,
+        scheduleCfg: cfg,
+        mode: 'PRO'
+      })}
+
       <form id="agenda-form" class="bg-white p-5 rounded-2xl border shadow-sm grid grid-cols-1 md:grid-cols-6 gap-3">
         <input id="ag-patient" placeholder="Nome do Paciente" required class="md:col-span-2 px-3 py-2 rounded-xl border text-sm" />
-        <input id="ag-date" type="date" value="${new Date().toISOString().slice(0,10)}" required class="px-3 py-2 rounded-xl border text-sm" />
+        <input id="ag-date" type="date" value="${agendaSelectedDate}" required class="px-3 py-2 rounded-xl border text-sm" />
         <input id="ag-time" type="time" value="15:00" required class="px-3 py-2 rounded-xl border text-sm" />
-        <select id="ag-plan" class="px-3 py-2 rounded-xl border text-sm bg-slate-50">
-          <option value="Consulta (${fmt(priceConsulta)})" data-amount="${priceConsulta}">Consulta (${fmt(priceConsulta)})</option>
-          <option value="Plano Trimestral (${fmt(priceTri)})" data-amount="${priceTri}">Plano Tri (${fmt(priceTri)})</option>
-          <option value="Plano Semestral (${fmt(priceSem)})" data-amount="${priceSem}">Plano Semestral (${fmt(priceSem)})</option>
+        <select id="ag-modality" class="px-3 py-2 rounded-xl border text-sm bg-slate-50 font-medium">
+          <option value="PRIMEIRA_VEZ" data-label="Consulta 1a Vez" data-amount="${pricePrimeira}">Consulta 1a Vez (${fmt(pricePrimeira)})</option>
+          <option value="RETORNO" data-label="Retorno" data-amount="${priceRetorno}">Retorno (${fmt(priceRetorno)})</option>
+          <option value="PLANO_TRI" data-label="Plano Tri" data-amount="${priceTri}">Plano Tri (${fmt(priceTri)})</option>
+          <option value="PLANO_SEMESTRAL" data-label="Plano Semestral" data-amount="${priceSem}">Plano Semestral (${fmt(priceSem)})</option>
         </select>
         <button type="submit" class="bg-brand text-white font-semibold rounded-xl py-2 text-sm">+ Agendar</button>
         <input id="ag-phone" placeholder="WhatsApp (ex: 21999990000)" class="px-3 py-2 rounded-xl border text-sm" />
@@ -1160,67 +1100,102 @@ async function renderAgenda() {
         <input id="ag-notes" placeholder="Observacoes / Link chamada" class="md:col-span-4 px-3 py-2 rounded-xl border text-sm" />
       </form>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        ${events.map(ev => {
-          const waMsg = encodeURIComponent(`Ola ${ev.patientName}! Confirmando sua consulta (${ev.type}) em ${ev.date} as ${ev.time} na ${ClinicDB.currentSession.clinicName}.`);
-          const waLink = ev.phone ? `https://wa.me/55${ev.phone.replace(/\D/g, '')}?text=${waMsg}` : `https://wa.me/?text=${waMsg}`;
-          return `
-            <div class="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between gap-4">
-              <div>
-                <div class="flex items-center justify-between gap-2">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">${ev.date} as ${ev.time}</span>
-                    ${ev.status ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : ev.status === 'REMARCADO' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}">${ev.status}</span>` : ''}
-                    ${ev.status && ev.status !== 'CONFIRMADO' ? `<button data-approve-ag="${ev.id}" class="text-xs font-bold text-brand hover:underline">✓ Aprovar</button>` : ''}
+      <div class="space-y-3">
+        <h2 class="text-sm font-bold uppercase text-slate-600">Consultas em ${agendaSelectedDate} (${dayEvents.length})</h2>
+
+        ${dayEvents.length === 0 ? `
+          <div class="bg-white p-6 rounded-2xl border border-dashed border-slate-300 text-center text-sm text-slate-500">
+            Dia <b>livre</b> — nenhuma consulta agendada para <b>${agendaSelectedDate}</b>.
+          </div>
+        ` : `
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            ${dayEvents.map(ev => {
+              const modLabel = ev.modalityLabel || formatModalityBadge(ev.modality) || ev.type || 'Consulta';
+              const waMsg = encodeURIComponent(`Ola ${ev.patientName}! Confirmando sua consulta (${modLabel}) em ${ev.date} as ${ev.time} na ${ClinicDB.currentSession.clinicName}.`);
+              const waLink = ev.phone ? `https://wa.me/55${ev.phone.replace(/\D/g, '')}?text=${waMsg}` : `https://wa.me/?text=${waMsg}`;
+              return `
+                <div class="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between gap-4">
+                  <div>
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">${ev.date} as ${ev.time}</span>
+                        <span class="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[11px] font-bold">${modLabel}</span>
+                        ${ev.status ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${ev.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700' : ev.status === 'REMARCADO' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}">${ev.status}</span>` : ''}
+                        ${ev.status && ev.status !== 'CONFIRMADO' ? `<button data-approve-ag="${ev.id}" class="text-xs font-bold text-brand hover:underline">✓ Aprovar</button>` : ''}
+                      </div>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <button data-reschedule-ag="${ev.id}" class="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold">Remarcar</button>
+                        <button data-del-ag="${ev.id}" class="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold">Excluir</button>
+                      </div>
+                    </div>
+                    <h3 class="font-bold text-lg text-slate-900 mt-2">${ev.patientName}</h3>
+                    <p class="text-sm text-slate-600">${modLabel} ${ev.amount ? `• <b>${fmt(ev.amount)}</b>` : ''} ${ev.paymentMethod ? `(${ev.paymentMethod})` : ''}</p>
+                    ${ev.notes ? `<p class="text-xs text-slate-400 mt-1">${ev.notes}</p>` : ''}
                   </div>
-                  <div class="flex items-center gap-2 shrink-0">
-                    <button data-reschedule-ag="${ev.id}" class="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold">
-                      Remarcar
-                    </button>
-                    <button data-del-ag="${ev.id}" class="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold">
-                      Excluir
-                    </button>
+                  <div class="flex flex-wrap gap-2 pt-3 border-t">
+                    <a href="${buildGoogleCalendarUrl(ev)}" target="_blank" class="flex-1 text-center px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">Google Calendar</a>
+                    <a href="${waLink}" target="_blank" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">WhatsApp</a>
+                    <button data-ics="${ev.id}" class="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold">.ICS</button>
                   </div>
                 </div>
-                <h3 class="font-bold text-lg text-slate-900 mt-2">${ev.patientName}</h3>
-                <p class="text-sm text-slate-600">${ev.type || 'Consulta Nutricional'} ${ev.amount ? `• <b>${fmt(ev.amount)}</b>` : ''} ${ev.paymentMethod ? `(${ev.paymentMethod})` : ''}</p>
-                ${ev.notes ? `<p class="text-xs text-slate-400 mt-1">${ev.notes}</p>` : ''}
-              </div>
-              <div class="flex flex-wrap gap-2 pt-3 border-t">
-                <a href="${buildGoogleCalendarUrl(ev)}" target="_blank" class="flex-1 text-center px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
-                  Google Calendar
-                </a>
-                <a href="${waLink}" target="_blank" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
-                  WhatsApp
-                </a>
-                <button data-ics="${ev.id}" class="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold">
-                  .ICS
-                </button>
-              </div>
-            </div>
-          `;
-        }).join('')}
+              `;
+            }).join('')}
+          </div>
+        `}
       </div>
     </div>
   `;
 
+  document.querySelectorAll('[data-cal-day]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      agendaSelectedDate = btn.dataset.calDay;
+      renderAgenda();
+    });
+  });
+
+  document.querySelectorAll('[data-cal-nav]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const delta = Number(btn.dataset.calNav);
+      const d = new Date(agendaCalYear, agendaCalMonth + delta, 1);
+      agendaCalYear = d.getFullYear();
+      agendaCalMonth = d.getMonth();
+      renderAgenda();
+    });
+  });
+
+  document.querySelector('[data-cal-today]')?.addEventListener('click', () => {
+    const now = new Date();
+    agendaCalYear = now.getFullYear();
+    agendaCalMonth = now.getMonth();
+    agendaSelectedDate = now.toISOString().slice(0, 10);
+    renderAgenda();
+  });
+
   document.getElementById('agenda-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const planSel = document.getElementById('ag-plan');
-    const selectedOpt = planSel.options[planSel.selectedIndex];
-    const amount = Number(selectedOpt?.dataset?.amount || priceConsulta);
+    const modSel = document.getElementById('ag-modality');
+    const selectedOpt = modSel.options[modSel.selectedIndex];
+    const modality = modSel.value;
+    const modalityLabel = selectedOpt?.dataset?.label || 'Consulta 1a Vez';
+    const amount = Number(selectedOpt?.dataset?.amount || pricePrimeira);
+    const chosenDate = document.getElementById('ag-date').value;
+    const chosenTime = document.getElementById('ag-time').value;
 
+    await ClinicDB.add('busySlots', { date: chosenDate, time: chosenTime });
     await ClinicDB.add('agenda', {
       patientName: document.getElementById('ag-patient').value,
       phone: document.getElementById('ag-phone').value,
-      date: document.getElementById('ag-date').value,
-      time: document.getElementById('ag-time').value,
-      type: planSel.value,
+      date: chosenDate,
+      time: chosenTime,
+      modality,
+      modalityLabel,
+      type: modalityLabel,
       amount,
       paymentMethod: document.getElementById('ag-pay-method').value,
       notes: document.getElementById('ag-notes').value,
       status: 'CONFIRMADO'
     });
+    agendaSelectedDate = chosenDate;
     renderAgenda();
   });
 
@@ -1261,6 +1236,7 @@ async function renderAgenda() {
         time: newTime.trim(),
         status: 'REMARCADO'
       });
+      agendaSelectedDate = newDate.trim();
       renderAgenda();
     });
   });
@@ -1284,7 +1260,7 @@ function buildGoogleCalendarUrl(ev) {
   const [h, m] = ev.time.split(':').map(Number);
   const endHour = String((h + 1) % 24).padStart(2, '0');
   const end = `${ev.date.replace(/-/g, '')}T${endHour}${String(m).padStart(2, '0')}00`;
-  const title = encodeURIComponent(`Consulta: ${ev.patientName} (${ev.type})`);
+  const title = encodeURIComponent(`Consulta: ${ev.patientName} (${ev.modalityLabel || ev.type})`);
   const details = encodeURIComponent(`${ev.notes || ''} — Agendado via ${ClinicDB.currentSession.clinicName}`);
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}`;
 }
@@ -1293,7 +1269,7 @@ function downloadICS(ev) {
   const start = `${ev.date.replace(/-/g, '')}T${ev.time.replace(':', '')}00`;
   const ics = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT',
-    `DTSTART:${start}`, `SUMMARY:Consulta - ${ev.patientName}`,
+    `DTSTART:${start}`, `SUMMARY:Consulta - ${ev.patientName} (${ev.modalityLabel || ev.type})`,
     `DESCRIPTION:${ev.type} ${ev.notes || ''}`, 'END:VEVENT', 'END:VCALENDAR'
   ].join('\r\n');
   const a = document.createElement('a');
