@@ -72,9 +72,10 @@ export const ClinicDB = {
   async login(email, password, expectedRole = null) {
     if (USE_FIREBASE) {
       await initFirebaseIfNeeded();
-      const cred = await fb.authMod.signInWithEmailAndPassword(fb.auth, email, password);
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      const cred = await fb.authMod.signInWithEmailAndPassword(fb.auth, cleanEmail, password);
       const snap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'users', cred.user.uid));
-      if (!snap.exists()) throw new Error('Perfil nao encontrado.');
+      if (!snap.exists()) throw new Error('Perfil nao encontrado no banco de dados. Solicite liberacao ou cadastre novamente.');
       const profile = { uid: cred.user.uid, ...snap.data() };
       if (expectedRole && profile.role && profile.role !== expectedRole) {
         throw new Error(
@@ -88,7 +89,7 @@ export const ClinicDB = {
     } else {
       this._seedLocalAccounts();
       const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
-      const user = accounts.find(a => a.email.toLowerCase() === email.toLowerCase() && a.password === password);
+      const user = accounts.find(a => a.email.toLowerCase() === email.trim().toLowerCase() && a.password === password);
       if (!user) throw new Error('E-mail ou senha invalidos.');
       if (expectedRole && user.role && user.role !== expectedRole) {
         throw new Error(
@@ -108,14 +109,15 @@ export const ClinicDB = {
 
   async registerTenant({ clinicName, name, crn, email, password, primaryColor, phone }) {
     const clinicId = 'clinic_' + Date.now();
+    const cleanEmail = String(email || '').trim().toLowerCase();
     const profile = {
-      clinicId, email, name, crn, clinicName,
+      clinicId, email: cleanEmail, name, crn, clinicName,
       phone: phone || '', primaryColor: primaryColor || '#059669',
       role: 'NUTRICIONISTA', createdAt: new Date().toISOString()
     };
     if (USE_FIREBASE) {
       await initFirebaseIfNeeded();
-      const cred = await fb.authMod.createUserWithEmailAndPassword(fb.auth, email, password);
+      const cred = await fb.authMod.createUserWithEmailAndPassword(fb.auth, cleanEmail, password);
       await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'users', cred.user.uid), profile);
       await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId), {
         clinicName, name, crn, phone: profile.phone, primaryColor: profile.primaryColor, ownerUid: cred.user.uid
@@ -125,7 +127,7 @@ export const ClinicDB = {
     } else {
       this._seedLocalAccounts();
       const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
-      if (accounts.find(a => a.email.toLowerCase() === email.toLowerCase())) throw new Error('E-mail ja cadastrado.');
+      if (accounts.find(a => a.email.toLowerCase() === cleanEmail)) throw new Error('E-mail ja cadastrado.');
       const acc = { ...profile, password };
       accounts.push(acc);
       localStorage.setItem(`${DB_PREFIX}accounts`, JSON.stringify(accounts));
@@ -137,53 +139,62 @@ export const ClinicDB = {
     }
   },
 
+  // Autocadastro do Paciente usando a instancia principal fb.auth / fb.db (sem secondaryApp)
   async registerPatientSelf({ clinicIdentifier, name, phone, email, password }) {
-    const clinicId = (clinicIdentifier || 'clinica_dra_clara').trim();
+    const clinicId = String(clinicIdentifier || 'clinica_dra_clara').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
     const now = new Date().toISOString();
 
     if (USE_FIREBASE) {
       await initFirebaseIfNeeded();
-      const secondaryApp = fb.appMod.initializeApp(FIREBASE_CONFIG, `PatientReg_${Date.now()}`);
-      const secondaryAuth = fb.authMod.getAuth(secondaryApp);
+      const cred = await fb.authMod.createUserWithEmailAndPassword(fb.auth, cleanEmail, password);
+      const uid = cred.user.uid;
+      await cred.user.getIdToken(true);
+
+      let clinicData = {};
       try {
-        const cred = await fb.authMod.createUserWithEmailAndPassword(secondaryAuth, email, password);
-        const uid = cred.user.uid;
         const clinicSnap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId));
-        const clinicData = clinicSnap.exists() ? clinicSnap.data() : {};
+        if (clinicSnap.exists()) clinicData = clinicSnap.data();
+      } catch (_) {}
 
-        const patientProfile = {
-          uid,
-          patientId: uid,
-          clinicId,
-          clinicName: clinicData.clinicName || clinicId,
-          name: clinicData.name || 'Profissional',
-          crn: clinicData.crn || '',
-          phone: clinicData.phone || '',
-          primaryColor: clinicData.primaryColor || '#059669',
-          userName: name,
-          patientName: name,
-          patientPhone: phone || '',
-          email: email.toLowerCase(),
-          role: 'PACIENTE',
-          approvalStatus: 'PENDING',
-          createdAt: now
-        };
+      const patientProfile = {
+        uid,
+        patientId: uid,
+        clinicId,
+        clinicName: clinicData.clinicName || clinicId,
+        name: clinicData.name || 'Profissional',
+        crn: clinicData.crn || '',
+        phone: clinicData.phone || '',
+        primaryColor: clinicData.primaryColor || '#059669',
+        userName: name.trim(),
+        patientName: name.trim(),
+        patientPhone: String(phone || '').trim(),
+        email: cleanEmail,
+        role: 'PACIENTE',
+        approvalStatus: 'PENDING',
+        createdAt: now
+      };
 
+      try {
         await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'users', uid), patientProfile);
         await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', clinicId, 'patientRequests', uid), {
           ...patientProfile,
           requestedAt: now
         });
-        await fb.authMod.signOut(secondaryAuth).catch(() => {});
-        return patientProfile;
-      } finally {
-        await fb.appMod.deleteApp(secondaryApp).catch(() => {});
+      } catch (err) {
+        await cred.user.delete().catch(() => {});
+        throw err;
       }
+
+      // Desloga apos criar para aguardar aceite do profissional sem deixar sessao pendente
+      await fb.authMod.signOut(fb.auth).catch(() => {});
+      this.currentSession = null;
+      return patientProfile;
     } else {
       this._seedLocalAccounts();
       this._ensureClinicSeed(clinicId);
       const accounts = JSON.parse(localStorage.getItem(`${DB_PREFIX}accounts`) || '[]');
-      if (accounts.find(a => a.email.toLowerCase() === email.toLowerCase())) {
+      if (accounts.find(a => a.email.toLowerCase() === cleanEmail)) {
         throw new Error('E-mail ja cadastrado.');
       }
       const uid = 'pat_' + Date.now();
@@ -191,11 +202,11 @@ export const ClinicDB = {
         uid,
         clinicId,
         patientId: uid,
-        name,
-        userName: name,
-        patientName: name,
-        phone: phone || '',
-        email,
+        name: name.trim(),
+        userName: name.trim(),
+        patientName: name.trim(),
+        phone: String(phone || '').trim(),
+        email: cleanEmail,
         password,
         role: 'PACIENTE',
         approvalStatus: 'PENDING',
@@ -238,14 +249,14 @@ export const ClinicDB = {
       await initFirebaseIfNeeded();
       const reqDoc = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patientRequests', uid));
       const reqData = reqDoc.exists() ? reqDoc.data() : {};
-      await fb.fsMod.updateDoc(fb.fsMod.doc(fb.db, 'users', uid), patch).catch(() => {});
-      await fb.fsMod.updateDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patientRequests', uid), patch).catch(() => {});
+      await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'users', uid), patch, { merge: true }).catch(() => {});
+      await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patientRequests', uid), patch, { merge: true }).catch(() => {});
       if (status === 'APPROVED') {
         await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'clinics', cid, 'patients', uid), {
           id: uid,
-          name: reqData.userName || reqData.name || reqData.email,
+          name: reqData.userName || reqData.patientName || reqData.email,
           email: reqData.email || '',
-          phone: reqData.phone || '',
+          phone: reqData.patientPhone || reqData.phone || '',
           approvalStatus: 'APPROVED',
           createdAt: new Date().toISOString()
         }, { merge: true });
